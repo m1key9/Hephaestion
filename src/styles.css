@@ -1,12 +1,12 @@
 :root {
-  --bg: #08080a;
-  --ink: #ecebf2;
-  --dim: #8d8a99;
-  --faint: #55525f;
+  --bg: #151515;
+  --ink: #ecebe6;
+  --dim: #8e8c86;
+  --faint: #5a5953;
   --soft: rgba(255, 255, 255, 0.055);
   --softer: rgba(255, 255, 255, 0.035);
   --hair: rgba(255, 255, 255, 0.08);
-  --panel: rgba(16, 15, 21, 0.92);
+  --panel: rgba(26, 26, 25, 0.9);
   --accent: #8f6bff;
   --accent-soft: rgba(143, 107, 255, 0.16);
   --sans: 'Instrument Sans Variable', 'Instrument Sans', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
@@ -27,6 +27,11 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 .app { position: fixed; inset: 0; }
+/* Film grain over everything: the whole thing should feel like it was cast, not rendered. */
+.app::after {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 50; opacity: 0.09; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
 .app canvas { touch-action: none; display: block; }
 
 h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
@@ -74,7 +79,7 @@ textarea { resize: none; }
   position: absolute; top: 0; left: 0; right: 0;
   display: flex; justify-content: space-between; align-items: center; gap: 12px;
   padding: calc(env(safe-area-inset-top) + 14px) 18px 20px;
-  background: linear-gradient(rgba(8, 8, 10, 0.85), transparent);
+  background: linear-gradient(rgba(17, 17, 17, 0.85), transparent);
   pointer-events: none;
 }
 .top > * { pointer-events: auto; }
@@ -92,11 +97,11 @@ textarea { resize: none; }
 .legend::-webkit-scrollbar { display: none; }
 .chip {
   flex: none; display: flex; align-items: center; gap: 7px;
-  background: rgba(20, 19, 26, 0.72); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  background: rgba(30, 30, 29, 0.72); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
   border-radius: 999px; padding: 6px 12px 6px 10px; font-size: 13px; font-weight: 500;
   transition: opacity 0.2s, background 0.2s;
 }
-.chip.on { background: color-mix(in srgb, var(--c) 28%, rgba(20, 19, 26, 0.8)); }
+.chip.on { background: color-mix(in srgb, var(--c) 28%, rgba(30, 30, 29, 0.8)); }
 .chip.dim { opacity: 0.35; }
 .chip.add { color: var(--dim); padding: 6px 12px; font-size: 15px; }
 .streak { color: var(--dim); font-variant-numeric: tabular-nums; }
@@ -106,7 +111,7 @@ textarea { resize: none; }
 .dims {
   position: absolute; right: 18px; bottom: calc(env(safe-area-inset-bottom) + 20px);
   width: 50px; height: 50px; border-radius: 50%;
-  background: rgba(20, 19, 26, 0.75); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  background: rgba(30, 30, 29, 0.75); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   font-size: 14px; font-weight: 600; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
 .app:has(.panel) .dims, .app:has(.sheet) .dims, .app:has(.empty) .dims { display: none; }

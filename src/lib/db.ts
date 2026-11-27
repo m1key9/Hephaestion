@@ -6,13 +6,27 @@ export const db = new Dexie('hephaestion') as Dexie & {
   trackers: EntityTable<Tracker, 'id'>;
   entries: EntityTable<Entry, 'id'>;
   notes: EntityTable<Note, 'id'>;
+  settings: EntityTable<Setting, 'key'>;
 };
+
+export interface Setting {
+  key: string;
+  value: string;
+}
 
 db.version(1).stores({
   trackers: 'id, createdAt',
   entries: 'id, date, trackerId',
   notes: 'id, date, createdAt',
 });
+db.version(2).stores({ settings: 'key' });
+
+/** The first day of the field. Nothing before it is drawn. */
+export const START_DATE = 'startDate';
+
+export async function setStartDate(key: string): Promise<void> {
+  await db.settings.put({ key: START_DATE, value: key });
+}
 
 export const uid = () => crypto.randomUUID();
 
@@ -103,6 +117,7 @@ export interface Backup {
   trackers: Tracker[];
   entries: Entry[];
   notes: Note[];
+  settings?: Setting[];
 }
 
 export async function exportBackup(): Promise<Backup> {
@@ -113,6 +128,7 @@ export async function exportBackup(): Promise<Backup> {
     trackers: await db.trackers.toArray(),
     entries: await db.entries.toArray(),
     notes: await db.notes.toArray(),
+    settings: await db.settings.toArray(),
   };
 }
 
@@ -121,10 +137,11 @@ export async function importBackup(data: unknown): Promise<void> {
   if (!b || b.app !== 'hephaestion' || !Array.isArray(b.trackers) || !Array.isArray(b.entries) || !Array.isArray(b.notes)) {
     throw new Error('Not a Hephaestion backup file.');
   }
-  await db.transaction('rw', db.trackers, db.entries, db.notes, async () => {
-    await Promise.all([db.trackers.clear(), db.entries.clear(), db.notes.clear()]);
+  await db.transaction('rw', [db.trackers, db.entries, db.notes, db.settings], async () => {
+    await Promise.all([db.trackers.clear(), db.entries.clear(), db.notes.clear(), db.settings.clear()]);
     await db.trackers.bulkPut(b.trackers);
     await db.entries.bulkPut(b.entries);
     await db.notes.bulkPut(b.notes);
+    if (Array.isArray(b.settings)) await db.settings.bulkPut(b.settings);
   });
 }

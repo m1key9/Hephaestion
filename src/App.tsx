@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { DayField, type DayMark, type Dimension } from './components/DayField';
 import { DayPanel } from './components/DayPanel';
 import { TrackerEditor } from './components/TrackerEditor';
-import { db, exportBackup, importBackup, sortTrackers } from './lib/db';
+import { START_DATE, db, exportBackup, importBackup, setStartDate, sortTrackers } from './lib/db';
 import { todayKey } from './lib/dates';
 import { streakInfo } from './lib/streaks';
 
@@ -31,6 +31,8 @@ export default function App() {
   const trackers = useLiveQuery(async () => sortTrackers(await db.trackers.toArray())) ?? [];
   const entries = useLiveQuery(() => db.entries.toArray()) ?? [];
   const noteDates = useLiveQuery(async () => new Set((await db.notes.orderBy('date').uniqueKeys()) as string[])) ?? new Set<string>();
+  // null = never chosen; undefined = still loading
+  const startSetting = useLiveQuery(async () => (await db.settings.get(START_DATE))?.value ?? null);
 
   const [selected, setSelected] = useState<string | null>(null);
   const [focus, setFocus] = useState({ key: today, nonce: 0 });
@@ -86,7 +88,17 @@ export default function App() {
     return new Map(active.map((t) => [t.id, streakInfo(byTracker.get(t.id) ?? new Set(), today)]));
   }, [entries, active, today]);
 
+  // The field begins on the chosen day. Before one is chosen, it begins with your earliest record, or today.
+  const startDate = useMemo(() => {
+    if (startSetting) return startSetting < today ? startSetting : today;
+    let first = today;
+    for (const e of entries) if (e.date < first) first = e.date;
+    for (const d of noteDates) if (d < first) first = d;
+    return first;
+  }, [startSetting, entries, noteDates, today]);
+
   const goTo = (key: string) => {
+    if (key < startDate) return;
     setSelected(key);
     setFocus({ key, nonce: Date.now() });
   };
@@ -107,6 +119,7 @@ export default function App() {
         zoomIn={zoomIn}
         onFlatChange={setFlat}
         onSelect={goTo}
+        startDate={startDate}
       />
 
       <header className="top">
@@ -144,11 +157,14 @@ export default function App() {
       )}
 
       {active.length === 0 && view === 'field' && !selected && (
-        <div className="empty">
-          <p>Every box is a day.</p>
-          <p className="muted">Set up what you want to track, then tap a day to mark it and write.</p>
-          <button className="solid" onClick={() => setView('trackers')}>Begin</button>
-        </div>
+        <Welcome
+          initial={startSetting ?? today}
+          today={today}
+          onBegin={async (d) => {
+            await setStartDate(d);
+            setView('trackers');
+          }}
+        />
       )}
 
       {selected && view === 'field' && (
@@ -157,6 +173,7 @@ export default function App() {
           today={today}
           trackers={active}
           onDate={goTo}
+          startDate={startDate}
           onClose={() => setSelected(null)}
           onManageTrackers={() => setView('trackers')}
           onNewTracker={() => setView('newTracker')}
@@ -174,12 +191,27 @@ export default function App() {
 
       {view === 'trackers' && <TrackerEditor trackers={trackers} onClose={() => setView('field')} />}
       {view === 'newTracker' && <TrackerEditor trackers={trackers} startNew onClose={() => setView('field')} />}
-      {view === 'menu' && <Menu onClose={() => setView('field')} />}
+      {view === 'menu' && <Menu startDate={startDate} today={today} onClose={() => setView('field')} />}
     </div>
   );
 }
 
-function Menu({ onClose }: { onClose: () => void }) {
+function Welcome({ initial, today, onBegin }: { initial: string; today: string; onBegin: (d: string) => void }) {
+  const [date, setDate] = useState(initial);
+  return (
+    <div className="empty">
+      <p>Every box is a day.</p>
+      <p className="muted">Where does your field begin? Pick a day that means something: today, a birthday, the start of the year.</p>
+      <label className="field">
+        <span className="field-label">The first day</span>
+        <input type="date" value={date} max={today} onChange={(e) => e.target.value && setDate(e.target.value)} />
+      </label>
+      <button className="solid" onClick={() => onBegin(date)}>Begin</button>
+    </div>
+  );
+}
+
+function Menu({ startDate, today, onClose }: { startDate: string; today: string; onClose: () => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [msg, setMsg] = useState('');
 
@@ -207,12 +239,23 @@ function Menu({ onClose }: { onClose: () => void }) {
   return (
     <div className="sheet" role="dialog" aria-label="Menu">
       <header className="sheet-head">
-        <h2>Archive</h2>
+        <h2>Settings</h2>
         <button className="icon" onClick={onClose} aria-label="Close">×</button>
       </header>
+      <label className="field">
+        <span className="field-label">The field begins on</span>
+        <input
+          type="date"
+          value={startDate}
+          max={today}
+          onChange={(e) => e.target.value && e.target.value <= today && setStartDate(e.target.value)}
+        />
+      </label>
+      <p className="muted small">Nothing before this day is drawn. Anything you recorded earlier is kept, just hidden.</p>
+      <h3>Backup</h3>
       <p className="muted">
         Everything you write lives only on this device. Nothing is uploaded anywhere. That also means if this
-        device is lost or its browser data is cleared, it's gone — so keep a backup.
+        device is lost or its browser data is cleared, it's gone, so keep a backup.
       </p>
       <div className="sheet-actions column">
         <button className="solid wide" onClick={download}>Export backup</button>
