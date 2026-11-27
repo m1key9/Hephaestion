@@ -107,7 +107,7 @@ export function DayPanel({ date, today, trackers, onDate, onClose, onManageTrack
   );
 }
 
-function Pill({ tracker, date, entry, open, onDetails }: {
+export function Pill({ tracker, date, entry, open, onDetails }: {
   tracker: Tracker; date: string; entry?: Entry; open: boolean; onDetails: () => void;
 }) {
   const done = !!entry;
@@ -200,7 +200,7 @@ function FieldInput({ field, value, onChange }: { field: TrackerField; value?: F
   );
 }
 
-function Composer({ date }: { date: string }) {
+export function Composer({ date }: { date: string }) {
   const [text, setText] = useState('');
   const [sealed, setSealed] = useState(false);
   const post = async () => {

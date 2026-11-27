@@ -66,3 +66,22 @@ describe('db', () => {
     expect(sortTrackers(await db.trackers.toArray()).map((t) => t.id)).toEqual(['t2', 't1']);
   });
 });
+
+describe('deadlines', async () => {
+  const { deadlineIcs, daysUntil } = await import('./ics');
+  it('counts days to a deadline', () => {
+    expect(daysUntil('2026-12-01', '2026-11-27')).toBe(4);
+    expect(daysUntil('2026-11-20', '2026-11-27')).toBe(-7);
+  });
+  it('writes an all-day calendar event with reminders', () => {
+    const ics = deadlineIcs(
+      { id: 'd1', title: 'Latin exam, part 2', date: '2026-12-10', remindDays: 3, done: false, createdAt: 0 },
+      new Date(Date.UTC(2026, 10, 27)),
+    );
+    expect(ics).toContain('SUMMARY:Latin exam\\, part 2');
+    expect(ics).toContain('DTSTART;VALUE=DATE:20261210');
+    expect(ics).toContain('DTEND;VALUE=DATE:20261211');
+    expect(ics).toContain('TRIGGER:PT9H');
+    expect(ics).toContain('TRIGGER:-P2DT15H');
+  });
+});
