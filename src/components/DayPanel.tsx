@@ -14,9 +14,10 @@ interface Props {
   onClose: () => void;
   onManageTrackers: () => void;
   onNewTracker: () => void;
+  startDate: string;
 }
 
-export function DayPanel({ date, today, trackers, onDate, onClose, onManageTrackers, onNewTracker }: Props) {
+export function DayPanel({ date, today, trackers, onDate, onClose, onManageTrackers, onNewTracker, startDate }: Props) {
   const entries = useLiveQuery(() => db.entries.where('date').equals(date).toArray(), [date]) ?? [];
   const notes = useLiveQuery(() => db.notes.where('date').equals(date).sortBy('createdAt'), [date]) ?? [];
   const byTracker = new Map(entries.map((e) => [e.trackerId, e]));
@@ -40,7 +41,7 @@ export function DayPanel({ date, today, trackers, onDate, onClose, onManageTrack
           </span>
         </div>
         <nav className="day-nav">
-          <button className="icon" onClick={() => onDate(addDays(date, -1))} aria-label="Previous day">‹</button>
+          <button className="icon" onClick={() => onDate(addDays(date, -1))} disabled={date <= startDate} aria-label="Previous day">‹</button>
           <button className="icon" onClick={() => onDate(addDays(date, 1))} aria-label="Next day">›</button>
           <button className="icon" onClick={onClose} aria-label="Close">×</button>
         </nav>
