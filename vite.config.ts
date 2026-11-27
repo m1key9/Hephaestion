@@ -16,8 +16,8 @@ export default defineConfig({
         name: 'Hephaestion',
         short_name: 'Hephaestion',
         description: 'A field of days. Track, write, reflect.',
-        theme_color: '#050505',
-        background_color: '#050505',
+        theme_color: '#08080a',
+        background_color: '#08080a',
         display: 'standalone',
         orientation: 'portrait',
         icons: [

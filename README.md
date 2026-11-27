@@ -34,4 +34,4 @@ npm test
 npm run build    # outputs static files to dist/
 ```
 
-Stack: Vite, React, TypeScript, three.js (via @react-three/fiber), Dexie (IndexedDB), vite-plugin-pwa. Type is EB Garamond.
+Stack: Vite, React, TypeScript, three.js (via @react-three/fiber), Dexie (IndexedDB), vite-plugin-pwa. Type is Instrument Sans; violet (#8f6bff) is the accent.

@@ -66,11 +66,11 @@ const smooth = (a: number, b: number, x: number) => {
 };
 
 // ---- colors ----
-const C_FUTURE = new THREE.Color('#131312');
-const C_EMPTY = new THREE.Color('#2e2c28');
-const C_NOTE = new THREE.Color('#7d776b');
-const C_TODAY = '#d6cfbf';
-const C_SELECTED = '#a8321e';
+const C_FUTURE = new THREE.Color('#121117');
+const C_EMPTY = new THREE.Color('#2a2833');
+const C_NOTE = new THREE.Color('#6d6585');
+const C_TODAY = '#ecebf2';
+const C_SELECTED = '#8f6bff';
 
 function writeMatrix(arr: Float32Array, i: number, x: number, y: number, z: number, sy: number, sx = 1, sz = sx) {
   const o = i * 16;
@@ -313,12 +313,12 @@ function Lattice({ view }: { view: View }) {
 
 // ---- labels, painted on the ground ----
 
-const SERIF = '"EB Garamond", "Iowan Old Style", Georgia, serif';
+const SANS = '"Instrument Sans Variable", "Instrument Sans", -apple-system, "Helvetica Neue", sans-serif';
 
 function useFontsReady() {
   const [ready, setReady] = useState(false);
   useEffect(() => {
-    Promise.all([document.fonts.load(`500 120px "EB Garamond"`), document.fonts.load(`italic 400 60px "EB Garamond"`)])
+    Promise.all([document.fonts.load(`600 120px "Instrument Sans Variable"`), document.fonts.load(`500 60px "Instrument Sans Variable"`)])
       .catch(() => {})
       .finally(() => setReady(true));
   }, []);
@@ -326,7 +326,7 @@ function useFontsReady() {
 }
 
 function makeLabel(text: string, px: number, color: string, align: CanvasTextAlign, style: string, spacing: number) {
-  const font = `${style} ${px}px ${SERIF}`;
+  const font = `${style} ${px}px ${SANS}`;
   const setup = (ctx: CanvasRenderingContext2D) => {
     ctx.font = font;
     // letterSpacing is newer canvas API; older browsers just ignore it.
@@ -378,7 +378,7 @@ function YearLabels({ centerYear }: { centerYear: number }) {
   const labels = [];
   for (let y = centerYear - RADIUS; y <= centerYear + RADIUS; y++) {
     labels.push(
-      <Label key={`y${y}`} text={String(y)} x={cellX(y, 0) - 0.5} z={-2.3} height={3} color="#bdb6a6" px={180} spacing={18} />,
+      <Label key={`y${y}`} text={String(y)} x={cellX(y, 0) - 0.5} z={-2.3} height={3} color="#d9d6e3" px={180} style="300" spacing={-4} />,
     );
     for (let m = 0; m < 12; m++) {
       const row = weekRow(new Date(y, m, 1));
@@ -389,9 +389,9 @@ function YearLabels({ centerYear }: { centerYear: number }) {
           x={cellX(y, 0) - 0.7}
           z={cellZ(row)}
           height={0.7}
-          color="#6b665d"
+          color="#615d6e"
           anchor="right"
-          style="italic 400"
+          style="500"
         />,
       );
     }
@@ -504,12 +504,12 @@ export function DayField(props: Props) {
       dpr={[1, 2]}
       camera={{ fov: 50, position: start.clone().addScaledVector(startDir, START_DIST).toArray(), near: 0.5, far: 900 }}
       gl={{ antialias: true }}
-      onCreated={({ gl }) => gl.setClearColor('#070706')}
+      onCreated={({ gl }) => gl.setClearColor('#08080a')}
     >
-      <fog attach="fog" args={['#070706', 15, 45]} />
+      <fog attach="fog" args={['#08080a', 15, 45]} />
       <ambientLight intensity={0.6} />
       <directionalLight position={[-10, 22, 8]} intensity={2} />
-      <directionalLight position={[12, 6, -10]} intensity={0.3} color="#a8321e" />
+      <directionalLight position={[12, 6, -10]} intensity={0.5} color="#8f6bff" />
       <Days
         marks={props.marks}
         today={props.today}

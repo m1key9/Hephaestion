@@ -4,18 +4,18 @@ import type { FieldType, Tracker, TrackerField } from '../lib/types';
 
 /** Muted, earthy defaults. Any color is allowed through the picker at the end. */
 export const PALETTE = [
-  '#d6cfbf', // bone
-  '#a8321e', // oxblood
-  '#b8922e', // ochre
-  '#3a5fa8', // lapis
-  '#6f6a60', // stone
-  '#4f7a4a', // moss
-  '#6d4a8c', // tyrian
-  '#b5642a', // rust
-  '#3f8a86', // verdigris
-  '#8c3a5a', // wine
-  '#5b4a3a', // umber
-  '#9aa3a8', // ash
+  '#8f6bff', // violet
+  '#e9e6f2', // bone
+  '#ff5d73', // coral
+  '#f2b94b', // amber
+  '#4f8dff', // blue
+  '#3fcf8e', // mint
+  '#2ec4d6', // cyan
+  '#ff8a4c', // tangerine
+  '#d46bff', // orchid
+  '#9a8f80', // stone
+  '#7a5a45', // umber
+  '#5c6370', // slate
 ];
 
 const FIELD_TYPES: { type: FieldType; label: string; hint: string }[] = [
@@ -63,15 +63,15 @@ export function TrackerEditor({ trackers, startNew, onClose }: Props) {
     <div className="sheet" role="dialog" aria-label="Trackers">
       <header className="sheet-head">
         <h2>Trackers</h2>
-        <button className="ghost" onClick={onClose} aria-label="Close">✕</button>
+        <button className="icon" onClick={onClose} aria-label="Close">×</button>
       </header>
       <p className="muted">
-        Anything you want to see across your days — Latin, the gym, a bad night's sleep, a bowel movement. Give it a
-        name and a color. It's a single tap unless you ask for more.
+        Anything you want to see across your days: Latin, the gym, a bad night's sleep. Give it a name and a color.
+        It's a single tap unless you ask for more.
       </p>
       {trackers.length === 0 && (
         <button className="solid wide" onClick={addStarters}>
-          Begin with Reading · Gym · Latin · Greek · Work
+          Start with Reading, Gym, Latin, Greek, Work
         </button>
       )}
       <ul className="tracker-list">
@@ -141,7 +141,7 @@ function EditOne({ tracker, isNew, onDone }: { tracker: Tracker; isNew: boolean;
     <div className="sheet" role="dialog" aria-label="Edit tracker">
       <header className="sheet-head">
         <h2>{isNew ? 'New tracker' : 'Edit tracker'}</h2>
-        <button className="ghost" onClick={onDone} aria-label="Back">✕</button>
+        <button className="icon" onClick={onDone} aria-label="Back">×</button>
       </header>
 
       <label className="field">
@@ -170,7 +170,7 @@ function EditOne({ tracker, isNew, onDone }: { tracker: Tracker; isNew: boolean;
           <input type="color" value={t.color} onChange={(e) => update({ color: e.target.value })} aria-label="Any color" />
         </div>
         <div className="preview" style={{ '--c': t.color } as React.CSSProperties}>
-          <span className="swatch" /> {t.name.trim() || 'Your tracker'} will look like this in the field.
+          <span className="swatch" /> {t.name.trim() || 'Your tracker'}
         </div>
       </div>
 
@@ -196,7 +196,7 @@ function EditOne({ tracker, isNew, onDone }: { tracker: Tracker; isNew: boolean;
             {f.type === 'number' && (
               <input className="unit-input" value={f.unit ?? ''} onChange={(e) => setField(f.id, { unit: e.target.value })} placeholder="unit" aria-label="Unit" />
             )}
-            <button className="ghost small" onClick={() => update({ fields: t.fields.filter((x) => x.id !== f.id) })} aria-label="Remove detail">✕</button>
+            <button className="ghost small" onClick={() => update({ fields: t.fields.filter((x) => x.id !== f.id) })} aria-label="Remove detail">×</button>
           </li>
         ))}
       </ul>

@@ -11,7 +11,7 @@
     "typecheck": "tsc -b"
   },
   "dependencies": {
-    "@fontsource/eb-garamond": "^5.3.0",
+    "@fontsource-variable/instrument-sans": "^5.3.0",
     "@react-three/drei": "^10.7.9",
     "@react-three/fiber": "^9.8.2",
     "dexie": "^4.4.7",

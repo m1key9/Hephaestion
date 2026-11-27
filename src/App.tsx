@@ -111,13 +111,13 @@ export default function App() {
 
       <header className="top">
         <div className="brand">
-          <span className="wordmark">HEPHAESTION</span>
-          <span className="sub">{filter ? `only ${byId.get(filter)?.name}` : 'a field of days'}</span>
+          <span className="wordmark">Hephaestion</span>
+          <span className="sub">{filter ? `Showing ${byId.get(filter)?.name}` : 'A field of days'}</span>
         </div>
         <nav className="actions">
           <button className="ghost" onClick={() => goTo(today)}>Today</button>
           <button className="ghost" onClick={() => setView('trackers')}>Trackers</button>
-          <button className="ghost" onClick={() => setView('menu')} aria-label="Menu">≡</button>
+          <button className="ghost" onClick={() => setView('menu')} aria-label="Menu">•••</button>
         </nav>
       </header>
 
@@ -208,7 +208,7 @@ function Menu({ onClose }: { onClose: () => void }) {
     <div className="sheet" role="dialog" aria-label="Menu">
       <header className="sheet-head">
         <h2>Archive</h2>
-        <button className="ghost" onClick={onClose} aria-label="Close">✕</button>
+        <button className="icon" onClick={onClose} aria-label="Close">×</button>
       </header>
       <p className="muted">
         Everything you write lives only on this device. Nothing is uploaded anywhere. That also means if this

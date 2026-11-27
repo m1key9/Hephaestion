@@ -80,11 +80,11 @@ export async function deleteTracker(id: string): Promise<void> {
 }
 
 export const STARTERS: { name: string; color: string }[] = [
-  { name: 'Reading', color: '#d6cfbf' },
-  { name: 'Gym', color: '#a8321e' },
-  { name: 'Latin', color: '#b8922e' },
-  { name: 'Greek', color: '#3a5fa8' },
-  { name: 'Work', color: '#6f6a60' },
+  { name: 'Reading', color: '#e9e6f2' },
+  { name: 'Gym', color: '#ff5d73' },
+  { name: 'Latin', color: '#f2b94b' },
+  { name: 'Greek', color: '#4f8dff' },
+  { name: 'Work', color: '#8f6bff' },
 ];
 
 export async function addStarters(): Promise<void> {
