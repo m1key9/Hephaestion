@@ -15,6 +15,10 @@ export interface Tracker {
   color: string;
   /** Empty means the tracker is a simple did-it / didn't check. */
   fields: TrackerField[];
+  /** Counts instead of a single check: can happen more than once a day. */
+  multi?: boolean;
+  /** Sort position in lists. */
+  order?: number;
   createdAt: number;
   archived: boolean;
 }
@@ -27,6 +31,8 @@ export interface Entry {
   date: string; // YYYY-MM-DD, local time
   trackerId: string;
   values: Record<string, FieldValue>;
+  /** Times it happened that day, for counting trackers. Absent means once. */
+  count?: number;
   updatedAt: number;
 }
 

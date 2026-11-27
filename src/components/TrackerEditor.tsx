@@ -1,65 +1,94 @@
 import { useState } from 'react';
-import { addStarters, db, deleteTracker, uid } from '../lib/db';
+import { addStarters, db, deleteTracker, moveTracker, sortTrackers, uid } from '../lib/db';
 import type { FieldType, Tracker, TrackerField } from '../lib/types';
 
-export const PALETTE = ['#e8e1cf', '#ff3b1f', '#c9a227', '#2f6bff', '#7a7a72', '#3fbf6f', '#b04cff', '#ff8a00', '#00c2c7', '#ff4f9a'];
+/** Muted, earthy defaults. Any color is allowed through the picker at the end. */
+export const PALETTE = [
+  '#d6cfbf', // bone
+  '#a8321e', // oxblood
+  '#b8922e', // ochre
+  '#3a5fa8', // lapis
+  '#6f6a60', // stone
+  '#4f7a4a', // moss
+  '#6d4a8c', // tyrian
+  '#b5642a', // rust
+  '#3f8a86', // verdigris
+  '#8c3a5a', // wine
+  '#5b4a3a', // umber
+  '#9aa3a8', // ash
+];
 
 const FIELD_TYPES: { type: FieldType; label: string; hint: string }[] = [
-  { type: 'number', label: 'NUMBER', hint: 'pages, km, sets…' },
-  { type: 'duration', label: 'TIME', hint: 'minutes' },
-  { type: 'scale', label: 'SCALE 1–5', hint: 'intensity, mood, focus' },
-  { type: 'text', label: 'TEXT', hint: 'book title, what you studied' },
+  { type: 'number', label: 'Number', hint: 'pages, km, sets…' },
+  { type: 'duration', label: 'Time', hint: 'minutes' },
+  { type: 'scale', label: 'Scale 1–5', hint: 'intensity, mood, focus' },
+  { type: 'text', label: 'Text', hint: 'book title, what you studied' },
 ];
 
 interface Props {
   trackers: Tracker[];
+  /** Open straight into a blank tracker. */
+  startNew?: boolean;
   onClose: () => void;
 }
 
-export function TrackerEditor({ trackers, onClose }: Props) {
-  const [editing, setEditing] = useState<Tracker | null>(null);
+const blank = (n: number): Tracker => ({
+  id: uid(),
+  name: '',
+  color: PALETTE[n % PALETTE.length],
+  fields: [],
+  order: Date.now(),
+  createdAt: Date.now(),
+  archived: false,
+});
 
-  const startNew = () =>
-    setEditing({
-      id: uid(),
-      name: '',
-      color: PALETTE[trackers.length % PALETTE.length],
-      fields: [],
-      createdAt: Date.now(),
-      archived: false,
-    });
+export function TrackerEditor({ trackers, startNew, onClose }: Props) {
+  const [editing, setEditing] = useState<Tracker | null>(() => (startNew ? blank(trackers.length) : null));
 
   if (editing) {
-    return <EditOne tracker={editing} isNew={!trackers.some((t) => t.id === editing.id)} onDone={() => setEditing(null)} />;
+    return (
+      <EditOne
+        tracker={editing}
+        isNew={!trackers.some((t) => t.id === editing.id)}
+        onDone={() => (startNew ? onClose() : setEditing(null))}
+      />
+    );
   }
 
-  const active = trackers.filter((t) => !t.archived);
-  const archived = trackers.filter((t) => t.archived);
+  const sorted = sortTrackers(trackers);
+  const active = sorted.filter((t) => !t.archived);
+  const archived = sorted.filter((t) => t.archived);
 
   return (
     <div className="sheet" role="dialog" aria-label="Trackers">
       <header className="sheet-head">
-        <h2>TRACKERS</h2>
+        <h2>Trackers</h2>
         <button className="ghost" onClick={onClose} aria-label="Close">✕</button>
       </header>
       <p className="muted">
-        A tracker is anything you want to see across days. On its own it's a single tap: did it, or didn't.
-        Add details only if you want them.
+        Anything you want to see across your days — Latin, the gym, a bad night's sleep, a bowel movement. Give it a
+        name and a color. It's a single tap unless you ask for more.
       </p>
       {trackers.length === 0 && (
         <button className="solid wide" onClick={addStarters}>
-          ADD STARTERS: READING · GYM · LATIN · GREEK · WORK
+          Begin with Reading · Gym · Latin · Greek · Work
         </button>
       )}
       <ul className="tracker-list">
-        {active.map((t) => (
-          <TrackerItem key={t.id} t={t} onEdit={() => setEditing(t)} />
+        {active.map((t, i) => (
+          <TrackerItem
+            key={t.id}
+            t={t}
+            onEdit={() => setEditing(t)}
+            onUp={i > 0 ? () => moveTracker(active, t.id, -1) : undefined}
+            onDown={i < active.length - 1 ? () => moveTracker(active, t.id, 1) : undefined}
+          />
         ))}
       </ul>
-      <button className="solid wide" onClick={startNew}>+ NEW TRACKER</button>
+      <button className="solid wide" onClick={() => setEditing(blank(trackers.length))}>+ New tracker</button>
       {archived.length > 0 && (
         <>
-          <h3>ARCHIVED</h3>
+          <h3>Archived</h3>
           <ul className="tracker-list">
             {archived.map((t) => (
               <TrackerItem key={t.id} t={t} onEdit={() => setEditing(t)} />
@@ -71,14 +100,27 @@ export function TrackerEditor({ trackers, onClose }: Props) {
   );
 }
 
-function TrackerItem({ t, onEdit }: { t: Tracker; onEdit: () => void }) {
+function describe(t: Tracker) {
+  const bits = [];
+  if (t.multi) bits.push('counted');
+  bits.push(...t.fields.map((f) => f.label.toLowerCase()));
+  return bits.length ? bits.join(' · ') : 'a single tap';
+}
+
+function TrackerItem({ t, onEdit, onUp, onDown }: { t: Tracker; onEdit: () => void; onUp?: () => void; onDown?: () => void }) {
   return (
-    <li>
+    <li className="tracker-row">
       <button className="tracker-item" onClick={onEdit} style={{ '--c': t.color } as React.CSSProperties}>
         <span className="swatch" />
         <span>{t.name}</span>
-        <span className="muted small">{t.fields.length ? t.fields.map((f) => f.label).join(' · ') : 'check only'}</span>
+        <span className="muted">{describe(t)}</span>
       </button>
+      {(onUp || onDown) && (
+        <span className="order">
+          <button onClick={onUp} disabled={!onUp} aria-label={`Move ${t.name} up`}>▲</button>
+          <button onClick={onDown} disabled={!onDown} aria-label={`Move ${t.name} down`}>▼</button>
+        </span>
+      )}
     </li>
   );
 }
@@ -98,17 +140,23 @@ function EditOne({ tracker, isNew, onDone }: { tracker: Tracker; isNew: boolean;
   return (
     <div className="sheet" role="dialog" aria-label="Edit tracker">
       <header className="sheet-head">
-        <h2>{isNew ? 'NEW TRACKER' : 'EDIT TRACKER'}</h2>
+        <h2>{isNew ? 'New tracker' : 'Edit tracker'}</h2>
         <button className="ghost" onClick={onDone} aria-label="Back">✕</button>
       </header>
 
       <label className="field">
-        <span className="field-label">NAME</span>
-        <input autoFocus={isNew} value={t.name} onChange={(e) => update({ name: e.target.value })} placeholder="Reading" />
+        <span className="field-label">Name</span>
+        <input
+          autoFocus={isNew}
+          value={t.name}
+          onChange={(e) => update({ name: e.target.value })}
+          onKeyDown={(e) => e.key === 'Enter' && save()}
+          placeholder="Latin, Shits taken, Called mum…"
+        />
       </label>
 
       <div className="field">
-        <span className="field-label">COLOR</span>
+        <span className="field-label">Color</span>
         <div className="palette">
           {PALETTE.map((c) => (
             <button
@@ -119,12 +167,23 @@ function EditOne({ tracker, isNew, onDone }: { tracker: Tracker; isNew: boolean;
               aria-label={`Color ${c}`}
             />
           ))}
-          <input type="color" value={t.color} onChange={(e) => update({ color: e.target.value })} aria-label="Custom color" />
+          <input type="color" value={t.color} onChange={(e) => update({ color: e.target.value })} aria-label="Any color" />
+        </div>
+        <div className="preview" style={{ '--c': t.color } as React.CSSProperties}>
+          <span className="swatch" /> {t.name.trim() || 'Your tracker'} will look like this in the field.
         </div>
       </div>
 
-      <h3>DETAILS (OPTIONAL)</h3>
-      <p className="muted small">Things you might want to note when you mark it. You never have to fill them in.</p>
+      <label className="toggle">
+        <input type="checkbox" checked={!!t.multi} onChange={(e) => update({ multi: e.target.checked })} />
+        <span>
+          Count it
+          <small>For things that can happen more than once a day. Each tap adds one.</small>
+        </span>
+      </label>
+
+      <h3>Details, if you want them</h3>
+      <p className="muted small">Things you might note when you mark it. You never have to fill them in.</p>
       <ul className="field-list">
         {t.fields.map((f) => (
           <li key={f.id} className="field-edit">
@@ -155,11 +214,11 @@ function EditOne({ tracker, isNew, onDone }: { tracker: Tracker; isNew: boolean;
       </div>
 
       <div className="sheet-actions">
-        <button className="solid" onClick={save} disabled={!t.name.trim()}>SAVE</button>
+        <button className="solid" onClick={save} disabled={!t.name.trim()}>Save</button>
         {!isNew && (
           <>
             <button className="ghost" onClick={async () => { await db.trackers.put({ ...t, archived: !t.archived }); onDone(); }}>
-              {t.archived ? 'UNARCHIVE' : 'ARCHIVE'}
+              {t.archived ? 'Unarchive' : 'Archive'}
             </button>
             <button
               className="ghost danger"
@@ -170,7 +229,7 @@ function EditOne({ tracker, isNew, onDone }: { tracker: Tracker; isNew: boolean;
                 }
               }}
             >
-              DELETE
+              Delete
             </button>
           </>
         )}

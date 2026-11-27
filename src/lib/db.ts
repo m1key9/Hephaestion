@@ -25,6 +25,37 @@ export async function toggleEntry(date: string, trackerId: string): Promise<void
   else await db.entries.put({ id, date, trackerId, values: {}, updatedAt: Date.now() });
 }
 
+/** For counting trackers: add or remove one occurrence. Reaching zero unmarks the day. */
+export async function bumpCount(date: string, trackerId: string, delta: number): Promise<void> {
+  const id = entryId(date, trackerId);
+  await db.transaction('rw', db.entries, async () => {
+    const e = await db.entries.get(id);
+    const next = (e ? (e.count ?? 1) : 0) + delta;
+    if (next <= 0) {
+      if (e) await db.entries.delete(id);
+      return;
+    }
+    await db.entries.put({ ...(e ?? { id, date, trackerId, values: {} }), count: next, updatedAt: Date.now() });
+  });
+}
+
+export const trackerOrder = (t: Tracker) => t.order ?? t.createdAt;
+
+export function sortTrackers(ts: Tracker[]): Tracker[] {
+  return [...ts].sort((a, b) => trackerOrder(a) - trackerOrder(b));
+}
+
+/** Swap a tracker with its neighbour in the list. */
+export async function moveTracker(list: Tracker[], id: string, dir: -1 | 1): Promise<void> {
+  const sorted = sortTrackers(list);
+  const i = sorted.findIndex((t) => t.id === id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= sorted.length) return;
+  const updated = sorted.map((t, k) => ({ ...t, order: k }));
+  [updated[i].order, updated[j].order] = [j, i];
+  await db.trackers.bulkPut(updated);
+}
+
 export async function setEntryValue(
   date: string,
   trackerId: string,
@@ -49,11 +80,11 @@ export async function deleteTracker(id: string): Promise<void> {
 }
 
 export const STARTERS: { name: string; color: string }[] = [
-  { name: 'Reading', color: '#e8e1cf' },
-  { name: 'Gym', color: '#ff3b1f' },
-  { name: 'Latin', color: '#c9a227' },
-  { name: 'Greek', color: '#2f6bff' },
-  { name: 'Work', color: '#7a7a72' },
+  { name: 'Reading', color: '#d6cfbf' },
+  { name: 'Gym', color: '#a8321e' },
+  { name: 'Latin', color: '#b8922e' },
+  { name: 'Greek', color: '#3a5fa8' },
+  { name: 'Work', color: '#6f6a60' },
 ];
 
 export async function addStarters(): Promise<void> {

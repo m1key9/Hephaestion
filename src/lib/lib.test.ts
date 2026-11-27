@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
 import { addDays, fromKey, toKey, weekRow, yearCells } from './dates';
 import { streakInfo } from './streaks';
-import { db, exportBackup, importBackup, setEntryValue, toggleEntry } from './db';
+import { bumpCount, db, exportBackup, importBackup, moveTracker, setEntryValue, sortTrackers, toggleEntry } from './db';
 
 describe('dates', () => {
   it('round-trips keys and crosses month/year boundaries', () => {
@@ -49,5 +49,20 @@ describe('db', () => {
     await importBackup(JSON.parse(JSON.stringify(backup)));
     expect(await db.entries.count()).toBe(1);
     await expect(importBackup({ nope: true })).rejects.toThrow();
+  });
+
+  it('counts repeat occurrences and unmarks at zero', async () => {
+    await bumpCount('2026-11-26', 't1', 1);
+    await bumpCount('2026-11-26', 't1', 1);
+    expect((await db.entries.get('2026-11-26|t1'))?.count).toBe(2);
+    await bumpCount('2026-11-26', 't1', -1);
+    await bumpCount('2026-11-26', 't1', -1);
+    expect(await db.entries.get('2026-11-26|t1')).toBeUndefined();
+  });
+
+  it('reorders trackers', async () => {
+    await db.trackers.put({ id: 't2', name: 'Latin', color: '#ff0', fields: [], createdAt: 2, archived: false });
+    await moveTracker(await db.trackers.toArray(), 't2', -1);
+    expect(sortTrackers(await db.trackers.toArray()).map((t) => t.id)).toEqual(['t2', 't1']);
   });
 });

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, setEntryValue, toggleEntry, uid } from '../lib/db';
+import { bumpCount, db, setEntryValue, toggleEntry, uid } from '../lib/db';
 import { addDays, dayOfYear, formatLong } from '../lib/dates';
 import type { Entry, FieldValue, Tracker, TrackerField } from '../lib/types';
 
@@ -13,9 +13,10 @@ interface Props {
   onDate: (key: string) => void;
   onClose: () => void;
   onManageTrackers: () => void;
+  onNewTracker: () => void;
 }
 
-export function DayPanel({ date, today, trackers, onDate, onClose, onManageTrackers }: Props) {
+export function DayPanel({ date, today, trackers, onDate, onClose, onManageTrackers, onNewTracker }: Props) {
   const entries = useLiveQuery(() => db.entries.where('date').equals(date).toArray(), [date]) ?? [];
   const notes = useLiveQuery(() => db.notes.where('date').equals(date).sortBy('createdAt'), [date]) ?? [];
   const byTracker = new Map(entries.map((e) => [e.trackerId, e]));
@@ -28,8 +29,8 @@ export function DayPanel({ date, today, trackers, onDate, onClose, onManageTrack
         <div className="panel-title">
           <h2>{formatLong(date)}</h2>
           <span className="meta">
-            DAY {String(dayOfYear(date)).padStart(3, '0')}
-            {date === today ? ' · TODAY' : future ? ' · NOT YET' : ''}
+            day {dayOfYear(date)}
+            {date === today ? ' · today' : future ? ' · not yet' : ''}
           </span>
         </div>
         <button className="ghost" onClick={() => onDate(addDays(date, 1))} aria-label="Next day">→</button>
@@ -37,7 +38,7 @@ export function DayPanel({ date, today, trackers, onDate, onClose, onManageTrack
       </header>
 
       <section>
-        <h3>MARKS</h3>
+        <h3>Marks</h3>
         {trackers.length === 0 && (
           <p className="muted">
             Nothing to track yet. <button className="link" onClick={onManageTrackers}>Set up trackers</button>
@@ -48,16 +49,19 @@ export function DayPanel({ date, today, trackers, onDate, onClose, onManageTrack
             <TrackerRow key={`${t.id}-${date}`} tracker={t} date={date} entry={byTracker.get(t.id)} />
           ))}
         </ul>
+        {trackers.length > 0 && (
+          <button className="link add-tracker" onClick={onNewTracker}>+ track something new</button>
+        )}
       </section>
 
       <section>
-        <h3>NOTES</h3>
+        <h3>Notes</h3>
         <ul className="notes">
           {notes.map((n) => (
             <li key={n.id} className="note">
               <div className="note-meta">
                 <span>{new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                {n.sealed && <span title="Sealed: never shared with AI reflections">■ SEALED</span>}
+                {n.sealed && <span title="Sealed: never shared with AI reflections">■ sealed</span>}
                 <button
                   className="link danger"
                   onClick={() => confirm('Delete this note?') && db.notes.delete(n.id)}
@@ -80,14 +84,24 @@ function TrackerRow({ tracker, date, entry }: { tracker: Tracker; date: string; 
   const done = !!entry;
   const [open, setOpen] = useState(false);
   const hasFields = tracker.fields.length > 0;
+  const count = entry ? (entry.count ?? 1) : 0;
   return (
     <li className={`mark ${done ? 'done' : ''}`} style={{ '--c': tracker.color } as React.CSSProperties}>
       <div className="mark-row">
-        <button className="mark-toggle" onClick={() => toggleEntry(date, tracker.id)} aria-pressed={done}>
+        <button
+          className="mark-toggle"
+          onClick={() => (tracker.multi ? bumpCount(date, tracker.id, 1) : toggleEntry(date, tracker.id))}
+          aria-pressed={done}
+        >
           <span className="swatch" />
           <span className="mark-name">{tracker.name}</span>
-          <span className="mark-state">{done ? 'DONE' : '—'}</span>
+          <span className="mark-state">{tracker.multi ? (count ? `× ${count}` : 'tap to count') : done ? 'done' : '—'}</span>
         </button>
+        {tracker.multi && done && (
+          <span className="counter">
+            <button onClick={() => bumpCount(date, tracker.id, -1)} aria-label={`One less ${tracker.name}`}>−</button>
+          </span>
+        )}
         {hasFields && (
           <button className="ghost small" onClick={() => setOpen(!open)} aria-expanded={open} aria-label="Details">
             {open ? '−' : '+'}
@@ -196,11 +210,11 @@ function Composer({ date }: { date: string }) {
           aria-pressed={sealed}
           title="Sealed notes will never be shared with AI reflections"
         >
-          {sealed ? '■ SEALED' : '□ SEAL'}
+          {sealed ? '■ sealed' : '□ seal'}
         </button>
         <span className={`count ${over ? 'over' : ''}`}>{text.length}/{NOTE_SOFT_LIMIT}</span>
         <button className="solid" onClick={post} disabled={!text.trim()}>
-          POST
+          Post
         </button>
       </div>
     </div>
