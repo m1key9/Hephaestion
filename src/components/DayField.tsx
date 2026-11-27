@@ -436,7 +436,8 @@ function labelArt(text: string, kind: 'month' | 'year'): LabelArt {
   const tex = new THREE.CanvasTexture(canvas);
   tex.anisotropy = 4;
   tex.colorSpace = THREE.SRGBColorSpace;
-  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0 });
+  // Drawn over the tiles so the void never chops the letters up.
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false, opacity: 0 });
   const art = { tex, aspect: w / h, mat };
   labelCache.set(id, art);
   return art;
@@ -446,7 +447,7 @@ function Label({ text, kind, x, z, height }: { text: string; kind: 'month' | 'ye
   const art = labelArt(text, kind);
   const w = height * art.aspect;
   return (
-    <mesh position={[x - w / 2, 0.05, z]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null} material={art.mat}>
+    <mesh position={[x - w / 2, 0.4, z]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null} material={art.mat} renderOrder={10}>
       <planeGeometry args={[w, height]} />
     </mesh>
   );
