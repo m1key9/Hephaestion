@@ -3,7 +3,7 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { MapControls } from '@react-three/drei';
 import * as THREE from 'three';
 import type { MapControls as MapControlsImpl } from 'three-stdlib';
-import { MONTHS, fromKey, toKey, weekRow, weekday, yearCells } from '../lib/dates';
+import { fromKey, toKey } from '../lib/dates';
 
 export interface DayMark {
   colors: string[];
@@ -16,117 +16,76 @@ interface Props {
   marks: Map<string, DayMark>;
   today: string;
   selected: string | null;
+  /** Days with a deadline get a ring. */
+  deadlines: Set<string>;
   /** Change the nonce to fly the camera to `key`. */
   focus: { key: string; nonce: number };
   /** The day panel covers part of the screen; frame the focused day in what's left. */
   panelOpen: boolean;
   /** '3d' still flattens on its own when you zoom far out, like a map. '2d' stays flat. */
   dimension: Dimension;
-  /** Change the nonce to zoom the camera in until the field is 3D again. */
+  /** Change the nonce to zoom the camera back in to the normal close view. */
   zoomIn: number;
+  /** Home screen: the field hangs far below as a backdrop, drifting, not interactive. */
+  ambient: boolean;
   /** Fires when the field visibly crosses between flat and tilted. */
   onFlatChange: (flat: boolean) => void;
   onSelect: (key: string) => void;
-  /** First day of the field. Days before it aren't drawn and the camera can't wander far past it. */
+  /** First day of the field. Earlier days are just more of the endless grey. */
   startDate: string;
 }
 
-/** Shared per-frame state: 0 = full 3D, 1 = flat top-down map. */
-type View = MutableRefObject<{ flat: number }>;
+/** Shared per-frame state: flat 0 = full 3D, 1 = top-down map. dist = camera distance. */
+type View = MutableRefObject<{ flat: number; dist: number }>;
 
-// ---- layout ----
-const PITCH = 1.18;
-const YEAR_GAP = 3.4;
-const YEAR_PITCH = 7 * PITCH + YEAR_GAP;
-const RADIUS = 6; // years rendered either side of the one you're looking at
-const SLOTS = (RADIUS * 2 + 1) * 366;
+// ---- layout: one month per row, day 1 on the left, months running down the plane ----
+const PITCH = 1.12;
+const TILE = 1;
 const BASE_YEAR = new Date().getFullYear();
-const START_DIST = 28;
+const ROW_RADIUS = 90; // months drawn either side of the one you're looking at
+const SLOTS = (ROW_RADIUS * 2 + 1) * 31;
+const START_DIST = 26;
+const AMBIENT_DIST = 30;
+/** On the home screen the camera hangs over the empty expanse, off to the side of your days. */
+const AMBIENT_OFFSET = new THREE.Vector3(-70, 0, -10);
 const TILTED = new THREE.Vector3(0, 24, 15).normalize();
 const TOP_DOWN = new THREE.Vector3(0, 1, 0.02).normalize();
 /** Zooming out past FLAT_FROM starts laying the field down; by FLAT_AT it's a flat map. */
-const FLAT_FROM = 36;
-const FLAT_AT = 62;
+const FLAT_FROM = 40;
+const FLAT_AT = 70;
 
-function cellX(year: number, col: number) {
-  return (year - BASE_YEAR) * YEAR_PITCH + col * PITCH;
-}
-function cellZ(row: number) {
-  return row * PITCH;
+const monthRow = (year: number, month: number) => (year - BASE_YEAR) * 12 + month;
+const rowYear = (row: number) => BASE_YEAR + Math.floor(row / 12);
+const rowMonth = (row: number) => ((row % 12) + 12) % 12;
+const daysIn = (row: number) => new Date(rowYear(row), rowMonth(row) + 1, 0).getDate();
+const cellX = (col: number) => col * PITCH;
+const cellZ = (row: number) => row * PITCH;
+
+function keyCell(key: string) {
+  const d = fromKey(key);
+  return { col: d.getDate() - 1, row: monthRow(d.getFullYear(), d.getMonth()) };
 }
 function keyPosition(key: string): THREE.Vector3 {
-  const d = fromKey(key);
-  return new THREE.Vector3(cellX(d.getFullYear(), weekday(d)), 0, cellZ(weekRow(d)));
+  const { col, row } = keyCell(key);
+  return new THREE.Vector3(cellX(col), 0, cellZ(row));
 }
-function yearAt(x: number) {
-  return BASE_YEAR + Math.round((x - 3 * PITCH) / YEAR_PITCH);
-}
+const rowAt = (z: number) => Math.round(z / PITCH);
+
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const smooth = (a: number, b: number, x: number) => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
 };
 
-// ---- colors ----
-const C_FUTURE = new THREE.Color('#2a2a29');
-const C_EMPTY = new THREE.Color('#6a6964');
-const C_NOTE = new THREE.Color('#a9a59c');
-const C_CONCRETE = new THREE.Color('#77756f');
-/** How far tracker colors are pulled toward the concrete, so they read as inlay rather than paint. */
-const INLAY_MUTE = 0.22;
-const C_TODAY = '#f2f0ea';
+// ---- palette: a muted grey field ----
+const BG = '#1b1b1d';
+const C_VOID = new THREE.Color('#2a2a2d'); // the endless field beyond your days
+const C_FUTURE = new THREE.Color('#303034');
+const C_EMPTY = new THREE.Color('#45454a');
+const C_NOTE = new THREE.Color('#77777e');
+const C_TODAY = '#f2f2f4';
 const C_SELECTED = '#8f6bff';
-const BG = '#151515';
-
-/**
- * The ground isn't level: it rolls gently, and the bare slabs rise and fall in long waves,
- * the way the stelae do in a field of concrete. Both lie down when the view goes flat.
- */
-const terrain = (x: number, z: number) => 0.45 * Math.sin(x * 0.075 + 0.6) * Math.cos(z * 0.06 - 0.3);
-const stele = (x: number, z: number) =>
-  0.5 + 0.5 * Math.sin(x * 0.11 + z * 0.045) * Math.cos(z * 0.09 - x * 0.035);
-
-/** Grainy, pitted concrete, painted once to a canvas and shared by every block. */
-function concreteTexture() {
-  const size = 256;
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  const ctx = c.getContext('2d')!;
-  const img = ctx.createImageData(size, size);
-  let seed = 1337;
-  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  for (let i = 0; i < size * size; i++) {
-    const v = 0.88 + (rnd() - 0.5) * 0.1;
-    const g = Math.max(0, Math.min(255, v * 255));
-    img.data[i * 4] = g;
-    img.data[i * 4 + 1] = g;
-    img.data[i * 4 + 2] = g * 0.985;
-    img.data[i * 4 + 3] = 255;
-  }
-  ctx.putImageData(img, 0, 0);
-  // soft stains, the way poured concrete weathers unevenly
-  for (let i = 0; i < 26; i++) {
-    const x = rnd() * size, y = rnd() * size, rad = 20 + rnd() * 60;
-    const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
-    const dark = rnd() < 0.6;
-    g.addColorStop(0, dark ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.07)');
-    g.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, size, size);
-  }
-  // air holes
-  for (let i = 0; i < 140; i++) {
-    ctx.fillStyle = `rgba(0,0,0,${0.15 + rnd() * 0.25})`;
-    ctx.beginPath();
-    ctx.arc(rnd() * size, rnd() * size, 0.6 + rnd() * 1.6, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.anisotropy = 4;
-  return tex;
-}
+const C_DEADLINE = '#8f6bff';
 
 function writeMatrix(arr: Float32Array, i: number, x: number, y: number, z: number, sy: number, sx = 1, sz = sx) {
   const o = i * 16;
@@ -136,28 +95,25 @@ function writeMatrix(arr: Float32Array, i: number, x: number, y: number, z: numb
   arr[o + 12] = x; arr[o + 13] = y; arr[o + 14] = z; arr[o + 15] = 1;
 }
 
-const SLAB = 0.22; // every day's base
-const FLAT_SLAB = 0.04;
-/** Each mark raises the day's pillar by one course of concrete and sets a colored band into it. */
-const COURSE = 0.42;
-const BAND = 0.11;
-const FLAT_LAYER = 0.05;
-const MAX_LAYERS = 8;
-const LAYER_SLOTS = SLOTS * 3; // plenty: most days carry a few marks at most
+const TILE_H = 0.14;
+/** Each mark lifts the day a little; its colors sit on top as stripes. */
+const LIFT = 0.16;
+const MAX_LIFT_MARKS = 5;
+const STRIPE_H = 0.03;
+const MAX_STRIPES = 8;
+const STRIPE_SLOTS = SLOTS * 3;
 
-/** A slow swell runs through the field so it never sits perfectly still. */
-const swell = (t: number, x: number, z: number) => 0.09 * Math.sin(t * 0.7 + x * 0.21 + z * 0.13);
+/** A slow swell runs through the lived days so the field never sits perfectly still. */
+const swell = (t: number, x: number, z: number) => 0.05 * Math.sin(t * 0.6 + x * 0.19 + z * 0.13);
 
-function Days({ marks, today, selected, onSelect, startDate, centerYear, view }: Pick<
-  Props, 'marks' | 'today' | 'selected' | 'onSelect' | 'startDate'
-> & {
-  centerYear: number;
-  view: View;
-}) {
-  const slabs = useRef<THREE.InstancedMesh>(null);
-  const layers = useRef<THREE.InstancedMesh>(null);
-  const geometry = useMemo(() => new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), []);
-  const concrete = useMemo(concreteTexture, []);
+const geometryBox = () => new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+
+function Days({ marks, today, selected, deadlines, onSelect, startDate, centerRow, view }: Pick<
+  Props, 'marks' | 'today' | 'selected' | 'deadlines' | 'onSelect' | 'startDate'
+> & { centerRow: number; view: View }) {
+  const tiles = useRef<THREE.InstancedMesh>(null);
+  const stripes = useRef<THREE.InstancedMesh>(null);
+  const geometry = useMemo(geometryBox, []);
 
   // Which day sits in which instance slot.
   const layout = useMemo(() => {
@@ -165,108 +121,87 @@ function Days({ marks, today, selected, onSelect, startDate, centerYear, view }:
     const xs = new Float32Array(SLOTS);
     const zs = new Float32Array(SLOTS);
     let i = 0;
-    const firstYear = Math.max(centerYear - RADIUS, fromKey(startDate).getFullYear());
-    for (let y = firstYear; y <= centerYear + RADIUS; y++) {
-      for (const c of yearCells(y)) {
-        if (c.key < startDate) continue;
-        keys[i] = c.key;
-        xs[i] = cellX(y, c.col);
-        zs[i] = cellZ(c.row);
+    for (let row = centerRow - ROW_RADIUS; row <= centerRow + ROW_RADIUS; row++) {
+      const y = rowYear(row);
+      const m = rowMonth(row);
+      const n = daysIn(row);
+      for (let d = 1; d <= n; d++) {
+        const key = toKey(new Date(y, m, d));
+        if (key < startDate) continue;
+        keys[i] = key;
+        xs[i] = cellX(d - 1);
+        zs[i] = cellZ(row);
         i++;
       }
     }
     return { keys, xs, zs, count: i };
-  }, [centerYear, startDate]);
+  }, [centerRow, startDate]);
 
-  // Slab colors per day, and one layer per tracker mark, colored by tracker.
-  // In 3D the layers stack upward; flat, they sit side by side as stripes across the tile.
   const stack = useMemo(() => {
-    const slabRgb = new Float32Array(SLOTS * 3);
-    const slabH = new Float32Array(SLOTS);
-    const steleH = new Float32Array(SLOTS); // height before any courses of marks
-    const layerDay = new Int32Array(LAYER_SLOTS); // which slab a layer sits on
-    const layerLevel = new Int32Array(LAYER_SLOTS);
-    const layerOf = new Int32Array(LAYER_SLOTS); // how many layers that day has
-    const layerRgb = new Float32Array(LAYER_SLOTS * 3);
+    const rgb = new Float32Array(SLOTS * 3);
+    const lift = new Float32Array(SLOTS);
+    const stripeDay = new Int32Array(STRIPE_SLOTS);
+    const stripeIdx = new Int32Array(STRIPE_SLOTS);
+    const stripeOf = new Int32Array(STRIPE_SLOTS);
+    const stripeRgb = new Float32Array(STRIPE_SLOTS * 3);
     const c = new THREE.Color();
     let n = 0;
     for (let i = 0; i < layout.count; i++) {
       const key = layout.keys[i]!;
       const mark = marks.get(key);
-      c.copy(key > today ? C_FUTURE : mark?.note ? C_NOTE : mark?.colors.length ? C_CONCRETE : C_EMPTY).toArray(slabRgb, i * 3);
-      // Lived days stand up out of the ground; days to come are just a plinth.
-      const courses = Math.min(mark?.colors.length ?? 0, MAX_LAYERS);
-      slabH[i] = key > today ? SLAB * 0.5 : SLAB + 0.7 * stele(layout.xs[i], layout.zs[i]) + courses * COURSE;
-      steleH[i] = slabH[i] - courses * COURSE;
-      if (!mark) continue;
-      const cols = mark.colors.slice(0, MAX_LAYERS);
-      for (let l = 0; l < cols.length && n < LAYER_SLOTS; l++, n++) {
-        layerDay[n] = i;
-        layerLevel[n] = l;
-        layerOf[n] = cols.length;
-        c.set(cols[l]).lerp(C_CONCRETE, INLAY_MUTE).toArray(layerRgb, n * 3);
+      c.copy(key > today ? C_FUTURE : mark?.note ? C_NOTE : C_EMPTY).toArray(rgb, i * 3);
+      const cols = mark?.colors.slice(0, MAX_STRIPES) ?? [];
+      lift[i] = Math.min(cols.length, MAX_LIFT_MARKS) * LIFT;
+      for (let s = 0; s < cols.length && n < STRIPE_SLOTS; s++, n++) {
+        stripeDay[n] = i;
+        stripeIdx[n] = s;
+        stripeOf[n] = cols.length;
+        c.set(cols[s]).toArray(stripeRgb, n * 3);
       }
     }
-    return { slabRgb, slabH, steleH, layerDay, layerLevel, layerOf, layerRgb, layerCount: n };
+    return { rgb, lift, stripeDay, stripeIdx, stripeOf, stripeRgb, stripeCount: n };
   }, [layout, marks, today]);
 
   useLayoutEffect(() => {
-    const s = slabs.current;
-    const l = layers.current;
-    if (!s || !l) return;
+    const t = tiles.current;
+    const s = stripes.current;
+    if (!t || !s) return;
     const c = new THREE.Color();
-    for (let i = 0; i < SLOTS; i++) s.setColorAt(i, c.fromArray(stack.slabRgb, i * 3));
-    for (let i = 0; i < stack.layerCount; i++) l.setColorAt(i, c.fromArray(stack.layerRgb, i * 3));
-    s.instanceColor!.needsUpdate = true;
-    if (l.instanceColor) l.instanceColor.needsUpdate = true;
-    l.count = stack.layerCount;
-  }, [stack]);
+    for (let i = 0; i < SLOTS; i++) t.setColorAt(i, c.fromArray(stack.rgb, i * 3));
+    for (let i = 0; i < stack.stripeCount; i++) s.setColorAt(i, c.fromArray(stack.stripeRgb, i * 3));
+    t.instanceColor!.needsUpdate = true;
+    if (s.instanceColor) s.instanceColor.needsUpdate = true;
+    t.count = layout.count;
+    s.count = stack.stripeCount;
+  }, [stack, layout]);
 
   useFrame(({ clock }) => {
-    const s = slabs.current;
-    const l = layers.current;
-    if (!s || !l) return;
-    const t = clock.elapsedTime;
+    const t = tiles.current;
+    const s = stripes.current;
+    if (!t || !s) return;
+    const time = clock.elapsedTime;
     const f = view.current.flat;
-    const live = 1 - f; // motion and relief die away as the field lies flat
+    const live = 1 - f;
+    const ta = t.instanceMatrix.array as Float32Array;
+    for (let i = 0; i < layout.count; i++) {
+      const x = layout.xs[i];
+      const z = layout.zs[i];
+      const h = TILE_H + stack.lift[i] * live;
+      writeMatrix(ta, i, x, swell(time, x, z) * live, z, h, TILE);
+    }
+    t.instanceMatrix.needsUpdate = true;
 
     const sa = s.instanceMatrix.array as Float32Array;
-    for (let i = 0; i < SLOTS; i++) {
-      if (i >= layout.count) {
-        writeMatrix(sa, i, 0, -9999, 0, 0.0001, 0.0001);
-        continue;
-      }
+    for (let n = 0; n < stack.stripeCount; n++) {
+      const i = stack.stripeDay[n];
       const x = layout.xs[i];
       const z = layout.zs[i];
-      const h = lerp(stack.slabH[i], FLAT_SLAB, f);
-      writeMatrix(sa, i, x, (swell(t, x, z) + terrain(x, z)) * live, z, h);
+      const top = swell(time, x, z) * live + TILE_H + stack.lift[i] * live;
+      const w = 0.9 / stack.stripeOf[n];
+      const sx = x - 0.45 + w * (stack.stripeIdx[n] + 0.5);
+      writeMatrix(sa, n, sx, top, z, STRIPE_H, w, 0.9);
     }
     s.instanceMatrix.needsUpdate = true;
-
-    const la = l.instanceMatrix.array as Float32Array;
-    for (let n = 0; n < stack.layerCount; n++) {
-      const i = stack.layerDay[n];
-      const x = layout.xs[i];
-      const z = layout.zs[i];
-      const level = stack.layerLevel[n];
-      const base = (swell(t, x, z) + terrain(x, z)) * live;
-      const slab = lerp(stack.slabH[i], FLAT_SLAB, f);
-      // 3D: a band set into each course of the pillar, standing just proud of the face.
-      const y3 = base + stack.steleH[i] + level * COURSE + (COURSE - BAND) / 2;
-      // Flat: equal stripes across the tile's top.
-      const w = 0.94 / stack.layerOf[n];
-      const xFlat = -0.47 + w * (level + 0.5);
-      writeMatrix(
-        la, n,
-        x + xFlat * f,
-        lerp(y3, base + slab, f),
-        z,
-        lerp(BAND, FLAT_LAYER, f),
-        lerp(1.035, w, f),
-        lerp(1.035, 0.94, f),
-      );
-    }
-    l.instanceMatrix.needsUpdate = true;
   });
 
   const pick = (key: string | null | undefined, e: ThreeEvent<MouseEvent>) => {
@@ -278,53 +213,43 @@ function Days({ marks, today, selected, onSelect, startDate, centerYear, view }:
   return (
     <>
       <instancedMesh
-        ref={slabs}
+        ref={tiles}
         args={[geometry, undefined, SLOTS]}
         onClick={(e) => e.instanceId !== undefined && pick(layout.keys[e.instanceId], e)}
         frustumCulled={false}
       >
-        <meshStandardMaterial map={concrete} roughness={0.95} metalness={0} />
+        <meshStandardMaterial roughness={0.9} metalness={0} />
       </instancedMesh>
       <instancedMesh
-        ref={layers}
-        args={[geometry, undefined, LAYER_SLOTS]}
-        onClick={(e) => e.instanceId !== undefined && pick(layout.keys[stack.layerDay[e.instanceId]], e)}
+        ref={stripes}
+        args={[geometry, undefined, STRIPE_SLOTS]}
+        onClick={(e) => e.instanceId !== undefined && pick(layout.keys[stack.stripeDay[e.instanceId]], e)}
         frustumCulled={false}
       >
-        <meshStandardMaterial map={concrete} roughness={0.95} metalness={0} />
+        <meshStandardMaterial roughness={0.6} metalness={0} emissiveIntensity={0} />
       </instancedMesh>
-      <Marker dayKey={today} color={C_TODAY} height={columnHeight(today, marks.get(today))} view={view} pulse />
-      {selected && selected >= startDate && (
-        <Marker
-          dayKey={selected}
-          color={C_SELECTED}
-          height={columnHeight(selected, marks.get(selected))}
-          view={view}
-          scale={selected === today ? 1.24 : 1.12}
-        />
-      )}
+      <Marker dayKey={today} color={C_TODAY} marks={marks} view={view} pulse />
+      {selected && selected >= startDate && <Marker dayKey={selected} color={C_SELECTED} marks={marks} view={view} scale={1.18} />}
+      {[...deadlines].map((d) => (
+        <Ring key={d} dayKey={d} view={view} />
+      ))}
     </>
   );
 }
 
-function columnHeight(key: string, mark?: DayMark) {
-  const p = keyPosition(key);
-  const n = Math.min(mark?.colors.length ?? 0, MAX_LAYERS);
-  return SLAB + 0.7 * stele(p.x, p.z) + n * COURSE + 0.25;
-}
-
-function Marker({ dayKey, color, height, view, pulse, scale = 1.12 }: {
-  dayKey: string; color: string; height: number; view: View; pulse?: boolean; scale?: number;
+function Marker({ dayKey, color, marks, view, pulse, scale = 1.1 }: {
+  dayKey: string; color: string; marks: Map<string, DayMark>; view: View; pulse?: boolean; scale?: number;
 }) {
   const ref = useRef<THREE.LineSegments>(null);
-  const geom = useMemo(() => new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0)), []);
+  const geom = useMemo(() => new THREE.EdgesGeometry(geometryBox()), []);
   const pos = useMemo(() => keyPosition(dayKey), [dayKey]);
+  const lift = Math.min(marks.get(dayKey)?.colors.length ?? 0, MAX_LIFT_MARKS) * LIFT;
   useFrame(({ clock }) => {
     if (!ref.current) return;
     const f = view.current.flat;
-    const k = pulse ? 1 + 0.08 * Math.sin(clock.elapsedTime * 3) : 1;
-    ref.current.position.y = (terrain(pos.x, pos.z) + swell(clock.elapsedTime, pos.x, pos.z)) * (1 - f);
-    ref.current.scale.set(scale * k, lerp(height, 0.15, f), scale * k);
+    const k = pulse ? 1 + 0.07 * Math.sin(clock.elapsedTime * 3) : 1;
+    ref.current.position.y = swell(clock.elapsedTime, pos.x, pos.z) * (1 - f);
+    ref.current.scale.set(scale * k, TILE_H + lift * (1 - f) + 0.12, scale * k);
   });
   return (
     <lineSegments ref={ref} geometry={geom} position={pos}>
@@ -333,59 +258,85 @@ function Marker({ dayKey, color, height, view, pulse, scale = 1.12 }: {
   );
 }
 
-/** A darker lattice far below the days. It drifts at a different depth, so panning has parallax. */
-function Lattice({ view }: { view: View }) {
-  const mesh = useRef<THREE.InstancedMesh>(null);
-  const N = 48;
-  const P = 2.6;
-  const geometry = useMemo(() => new THREE.BoxGeometry(1.9, 1, 1.9).translate(0, 0.5, 0), []);
-  const controls = useThree((s) => s.controls) as MapControlsImpl | null;
+/** A thin violet ring laid around a day that holds a deadline. */
+function Ring({ dayKey, view }: { dayKey: string; view: View }) {
+  const ref = useRef<THREE.Mesh>(null);
+  const pos = useMemo(() => keyPosition(dayKey), [dayKey]);
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    ref.current.position.y = 0.02 + swell(clock.elapsedTime, pos.x, pos.z) * (1 - view.current.flat);
+  });
+  return (
+    <mesh ref={ref} position={pos} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+      <ringGeometry args={[0.66, 0.74, 40]} />
+      <meshBasicMaterial color={C_DEADLINE} transparent opacity={0.9} fog={false} />
+    </mesh>
+  );
+}
 
-  useEffect(() => {
+/**
+ * The endless part: an expanse of identical grey tiles that surrounds your days in every direction,
+ * so the field reads as one vast square. It's re-laid only when the camera crosses a tile.
+ */
+function Void({ startDate, view }: { startDate: string; view: View }) {
+  const mesh = useRef<THREE.InstancedMesh>(null);
+  const N = 130;
+  const geometry = useMemo(geometryBox, []);
+  const controls = useThree((s) => s.controls) as MapControlsImpl | null;
+  const last = useRef({ c: NaN, r: NaN, s: '' });
+
+  useLayoutEffect(() => {
     const m = mesh.current;
     if (!m) return;
     const c = new THREE.Color();
     for (let i = 0; i < N * N; i++) {
-      c.setHSL(0, 0, 0.05 + ((i * 7919) % 13) * 0.005);
+      // the faintest variation, like a field of slightly uneven stone
+      c.copy(C_VOID).multiplyScalar(0.92 + ((i * 7919) % 17) * 0.01);
       m.setColorAt(i, c);
     }
-    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    m.instanceColor!.needsUpdate = true;
   }, []);
 
-  useFrame(({ clock }) => {
+  useFrame(() => {
     const m = mesh.current;
     if (!m) return;
-    const f = view.current.flat;
-    m.visible = f < 0.98;
-    if (!m.visible) return;
-    const t = clock.elapsedTime;
     const target = controls?.target ?? new THREE.Vector3();
-    const ox = Math.round(target.x / P) * P - (N / 2) * P;
-    const oz = Math.round(target.z / P) * P - (N / 2) * P;
+    const c0 = Math.round(target.x / PITCH) - N / 2;
+    const r0 = Math.round(target.z / PITCH) - N / 2;
+    const l = last.current;
+    if (c0 === l.c && r0 === l.r && startDate === l.s) return;
+    l.c = c0; l.r = r0; l.s = startDate;
     const arr = m.instanceMatrix.array as Float32Array;
+    let i = 0;
     for (let a = 0; a < N; a++) {
       for (let b = 0; b < N; b++) {
-        const x = ox + a * P;
-        const z = oz + b * P;
-        const h = 1.2 + 1.1 * Math.sin(x * 0.11 + t * 0.35) * Math.cos(z * 0.09 - t * 0.25);
-        // As the field flattens, the lattice sinks away.
-        writeMatrix(arr, a * N + b, x, -12 - 30 * f, z, Math.max(0.1, h * (1 - f)));
+        const col = c0 + a;
+        const row = r0 + b;
+        // Real days (on or after the start) are drawn by Days; everything else is void.
+        let real = false;
+        if (col >= 0 && col < 31 && col < daysIn(row)) {
+          real = toKey(new Date(rowYear(row), rowMonth(row), col + 1)) >= startDate;
+        }
+        if (real) continue;
+        writeMatrix(arr, i++, cellX(col), 0, cellZ(row), TILE_H * 0.7, TILE);
       }
     }
+    m.count = i;
     m.instanceMatrix.needsUpdate = true;
+    void view;
   });
 
   return (
     <instancedMesh ref={mesh} args={[geometry, undefined, N * N]} frustumCulled={false} raycast={() => null}>
-      <meshLambertMaterial color="#6a6a6a" />
+      <meshStandardMaterial roughness={0.95} metalness={0} />
     </instancedMesh>
   );
 }
 
 /** Grey motes hanging in the air, drifting on a slow current. They travel with the camera. */
 function Dust({ view }: { view: View }) {
-  const N = 1400;
-  const SPAN = { x: 90, y: 26, z: 90 };
+  const N = 1600;
+  const SPAN = { x: 110, y: 30, z: 110 };
   const ref = useRef<THREE.Points>(null);
   const controls = useThree((s) => s.controls) as MapControlsImpl | null;
   const { base, geom } = useMemo(() => {
@@ -422,140 +373,130 @@ function Dust({ view }: { view: View }) {
     const target = controls?.target ?? new THREE.Vector3();
     const pos = geom.attributes.position.array as Float32Array;
     const wrap = (v: number, span: number) => ((v % span) + span) % span;
+    // Far out, lift the dust up toward the camera so it still hangs in view.
+    const rise = Math.max(0, view.current.dist - 40) * 0.55;
     for (let i = 0; i < N; i++) {
       const bx = base[i * 3], by = base[i * 3 + 1], bz = base[i * 3 + 2];
-      // a steady drift plus a little wander, wrapped into a box that follows the camera's target
       const x = wrap(bx + t * 0.35 + Math.sin(t * 0.3 + i) * 0.6 - target.x, SPAN.x) + target.x - SPAN.x / 2;
       const z = wrap(bz + t * 0.12 + Math.cos(t * 0.25 + i * 1.7) * 0.6 - target.z, SPAN.z) + target.z - SPAN.z / 2;
-      const y = wrap(by + t * 0.18 + Math.sin(t * 0.5 + i * 0.37) * 0.4, SPAN.y) - 2;
+      const y = wrap(by + t * 0.18 + Math.sin(t * 0.5 + i * 0.37) * 0.4, SPAN.y) - 2 + rise;
       pos[i * 3] = x;
       pos[i * 3 + 1] = y;
       pos[i * 3 + 2] = z;
     }
     geom.attributes.position.needsUpdate = true;
-    (pts.material as THREE.PointsMaterial).opacity = 0.55 * (1 - 0.6 * view.current.flat);
+    const mat = pts.material as THREE.PointsMaterial;
+    mat.size = 0.16 * (1 + Math.max(0, view.current.dist - 40) / 60);
   });
 
   return (
     <points ref={ref} geometry={geom} frustumCulled={false} raycast={() => null}>
-      <pointsMaterial map={sprite} color="#bdbcb6" size={0.16} sizeAttenuation transparent depthWrite={false} opacity={0.55} />
+      <pointsMaterial map={sprite} color="#c4c4c8" size={0.16} sizeAttenuation transparent depthWrite={false} opacity={0.5} />
     </points>
   );
 }
 
-// ---- labels, painted on the ground ----
+// ---- labels: they surface only as you pull back, so up close it's just the field ----
 
 const SANS = '"Instrument Sans Variable", "Instrument Sans", -apple-system, "Helvetica Neue", sans-serif';
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 function useFontsReady() {
   const [ready, setReady] = useState(false);
   useEffect(() => {
-    Promise.all([document.fonts.load(`600 120px "Instrument Sans Variable"`), document.fonts.load(`500 60px "Instrument Sans Variable"`)])
+    Promise.all([document.fonts.load(`300 120px "Instrument Sans Variable"`), document.fonts.load(`500 60px "Instrument Sans Variable"`)])
       .catch(() => {})
       .finally(() => setReady(true));
   }, []);
   return ready;
 }
 
-function makeLabel(text: string, px: number, color: string, align: CanvasTextAlign, style: string, spacing: number) {
-  const font = `${style} ${px}px ${SANS}`;
-  const setup = (ctx: CanvasRenderingContext2D) => {
-    ctx.font = font;
-    // letterSpacing is newer canvas API; older browsers just ignore it.
-    (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${spacing}px`;
-  };
+interface LabelArt { tex: THREE.CanvasTexture; aspect: number; mat: THREE.MeshBasicMaterial }
+const labelCache = new Map<string, LabelArt>();
+
+function labelArt(text: string, kind: 'month' | 'year'): LabelArt {
+  const id = `${kind}:${text}`;
+  const hit = labelCache.get(id);
+  if (hit) return hit;
+  const px = kind === 'year' ? 200 : 72;
+  const font = `${kind === 'year' ? 300 : 500} ${px}px ${SANS}`;
   const probe = document.createElement('canvas').getContext('2d')!;
-  setup(probe);
-  const w = Math.ceil(probe.measureText(text).width) + 12;
+  probe.font = font;
+  const w = Math.ceil(probe.measureText(text).width) + 16;
   const h = Math.ceil(px * 1.3);
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext('2d')!;
-  setup(ctx);
-  ctx.fillStyle = color;
+  ctx.font = font;
+  ctx.fillStyle = kind === 'year' ? '#d6d6da' : '#9a9aa0';
   ctx.textBaseline = 'middle';
-  ctx.textAlign = align;
-  ctx.fillText(text, align === 'right' ? w - 6 : 6, h / 2);
+  ctx.textAlign = 'right';
+  ctx.fillText(text, w - 8, h / 2);
   const tex = new THREE.CanvasTexture(canvas);
   tex.anisotropy = 4;
   tex.colorSpace = THREE.SRGBColorSpace;
-  return { tex, aspect: w / h };
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0 });
+  const art = { tex, aspect: w / h, mat };
+  labelCache.set(id, art);
+  return art;
 }
 
-function Label({ text, x, z, height, color, anchor = 'left', px = 96, style = '500', spacing = 0 }: {
-  text: string; x: number; z: number; height: number; color: string; anchor?: 'left' | 'right';
-  px?: number; style?: string; spacing?: number;
-}) {
-  const { tex, aspect } = useMemo(
-    () => makeLabel(text, px, color, anchor, style, spacing),
-    [text, px, color, anchor, style, spacing],
-  );
-  useEffect(() => () => tex.dispose(), [tex]);
-  const w = height * aspect;
-  const cx = anchor === 'left' ? x + w / 2 : x - w / 2;
+function Label({ text, kind, x, z, height }: { text: string; kind: 'month' | 'year'; x: number; z: number; height: number }) {
+  const art = labelArt(text, kind);
+  const w = height * art.aspect;
   return (
-    <mesh position={[cx, 0.02, z]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+    <mesh position={[x - w / 2, 0.05, z]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null} material={art.mat}>
       <planeGeometry args={[w, height]} />
-      <meshBasicMaterial map={tex} transparent depthWrite={false} />
     </mesh>
   );
 }
 
-const MONTH_NAMES = MONTHS.map((m) => m[0] + m.slice(1).toLowerCase());
-
-function YearLabels({ centerYear, startDate }: { centerYear: number; startDate: string }) {
+function Labels({ centerRow, startDate, view }: { centerRow: number; startDate: string; view: View }) {
   const ready = useFontsReady();
+  useFrame(() => {
+    const d = view.current.dist;
+    const month = smooth(30, 48, d);
+    const year = smooth(55, 85, d);
+    for (const [id, art] of labelCache) art.mat.opacity = id.startsWith('year') ? year : month * 0.9;
+  });
   if (!ready) return null;
-  const labels = [];
-  const firstYear = Math.max(centerYear - RADIUS, fromKey(startDate).getFullYear());
-  for (let y = firstYear; y <= centerYear + RADIUS; y++) {
-    labels.push(
-      <Label key={`y${y}`} text={String(y)} x={cellX(y, 0) - 0.5} z={-2.3} height={3} color="#b9b7b1" px={180} style="300" spacing={-4} />,
-    );
-    for (let m = 0; m < 12; m++) {
-      if (toKey(new Date(y, m + 1, 0)) < startDate) continue; // month ended before the field begins
-      const row = weekRow(new Date(y, m, 1));
-      labels.push(
-        <Label
-          key={`m${y}-${m}`}
-          text={MONTH_NAMES[m]}
-          x={cellX(y, 0) - 0.7}
-          z={cellZ(row)}
-          height={0.7}
-          color="#5f5e5a"
-          anchor="right"
-          style="500"
-        />,
-      );
+  const out = [];
+  const s = fromKey(startDate);
+  const firstRow = monthRow(s.getFullYear(), s.getMonth());
+  for (let row = Math.max(firstRow, centerRow - ROW_RADIUS); row <= centerRow + ROW_RADIUS; row++) {
+    const m = rowMonth(row);
+    out.push(<Label key={`m${row}`} text={MONTHS[m]} kind="month" x={-1.1} z={cellZ(row)} height={1.15} />);
+    if (m === 0 || row === firstRow) {
+      // the year stands beside its twelve rows
+      out.push(<Label key={`y${row}`} text={String(rowYear(row))} kind="year" x={-9} z={cellZ(row + Math.min(5.5, (11 - m) / 2))} height={9} />);
     }
   }
-  return <>{labels}</>;
+  return <>{out}</>;
 }
 
 // ---- camera ----
 
-function Rig({ focus, panelOpen, dimension, zoomIn, onFlatChange, onCenterYear, view, startDate, today }: Pick<
-  Props, 'focus' | 'panelOpen' | 'dimension' | 'zoomIn' | 'onFlatChange' | 'startDate' | 'today'
-> & { onCenterYear: (y: number) => void; view: View }) {
+function Rig({ focus, panelOpen, dimension, zoomIn, ambient, onFlatChange, onCenterRow, view }: Pick<
+  Props, 'focus' | 'panelOpen' | 'dimension' | 'zoomIn' | 'ambient' | 'onFlatChange'
+> & { onCenterRow: (r: number) => void; view: View }) {
   const controls = useThree((s) => s.controls) as MapControlsImpl | null;
   const camera = useThree((s) => s.camera);
   const scene = useThree((s) => s.scene);
   const goal = useRef<THREE.Vector3 | null>(null);
-  const goalDist = useRef<number | null>(null);
-  const lastYear = useRef(BASE_YEAR);
+  const goalDist = useRef<number | null>(ambient ? AMBIENT_DIST : null);
+  const lastRow = useRef(rowAt(keyPosition(focus.key).z));
   const wasFlat = useRef(false);
   const dir = useMemo(() => new THREE.Vector3(), []);
 
   useEffect(() => {
     const p = keyPosition(focus.key);
+    p.x = Math.max(p.x, 15 * PITCH * 0.6);
     if (panelOpen && controls) {
       const dist = camera.position.distanceTo(controls.target);
       // Phones: panel is a bottom sheet, so aim below the day. Wide screens: panel is on the right.
       if (window.innerWidth < 900) p.z += dist * 0.3;
       else p.x += dist * 0.22;
-    } else {
-      p.x += 3 * PITCH;
     }
     goal.current = p;
     // re-aim only when a new focus is requested
@@ -567,6 +508,14 @@ function Rig({ focus, panelOpen, dimension, zoomIn, onFlatChange, onCenterYear, 
   }, [zoomIn]);
 
   useEffect(() => {
+    if (controls) controls.enabled = !ambient;
+    if (ambient && controls) {
+      goal.current = controls.target.clone().add(AMBIENT_OFFSET);
+      goalDist.current = AMBIENT_DIST;
+    }
+  }, [ambient, controls]);
+
+  useEffect(() => {
     if (!controls) return;
     const cancel = () => {
       goal.current = null;
@@ -576,35 +525,31 @@ function Rig({ focus, panelOpen, dimension, zoomIn, onFlatChange, onCenterYear, 
     return () => controls.removeEventListener('start', cancel);
   }, [controls]);
 
-  useFrame((_, dt) => {
+  useFrame(({ clock }, dt) => {
     if (!controls) return;
-    const ease = 1 - Math.pow(0.002, dt);
+    const ease = 1 - Math.pow(0.004, dt);
     if (goal.current) {
       const delta = goal.current.clone().sub(controls.target).multiplyScalar(ease);
       controls.target.add(delta);
       camera.position.add(delta);
       if (goal.current.distanceTo(controls.target) < 0.01) goal.current = null;
     }
-    // Keep the view on the field: from a little before its first day to a few years ahead.
-    const minX = cellX(fromKey(startDate).getFullYear(), 0) - 8;
-    const maxX = cellX(fromKey(today).getFullYear() + 3, 7) + 8;
-    const cx = Math.min(maxX, Math.max(minX, controls.target.x));
-    const cz = Math.min(72, Math.max(-12, controls.target.z));
-    if (cx !== controls.target.x || cz !== controls.target.z) {
-      const shift = new THREE.Vector3(cx - controls.target.x, 0, cz - controls.target.z);
-      controls.target.add(shift);
-      camera.position.add(shift);
+    if (ambient) {
+      // the home backdrop drifts very slowly across the field
+      controls.target.x += Math.sin(clock.elapsedTime * 0.05) * dt * 0.8;
+      controls.target.z += dt * 0.25;
     }
 
     let dist = camera.position.distanceTo(controls.target);
     if (goalDist.current !== null) {
-      dist = lerp(dist, goalDist.current, ease);
+      dist = lerp(dist, goalDist.current, 1 - Math.pow(0.05, dt));
       if (Math.abs(dist - goalDist.current) < 0.05) goalDist.current = null;
     }
 
     // Like a map: zoom far enough out and the field lies down flat. '2d' keeps it flat at any zoom.
-    const want = dimension === '2d' ? 1 : smooth(FLAT_FROM, FLAT_AT, dist);
+    const want = ambient ? 0 : dimension === '2d' ? 1 : smooth(FLAT_FROM, FLAT_AT, dist);
     const v = view.current;
+    v.dist = dist;
     v.flat = lerp(v.flat, want, 1 - Math.pow(0.02, dt));
     if (Math.abs(v.flat - want) < 0.001) v.flat = want;
 
@@ -612,10 +557,9 @@ function Rig({ focus, panelOpen, dimension, zoomIn, onFlatChange, onCenterYear, 
     camera.position.copy(controls.target).addScaledVector(dir, dist);
     camera.lookAt(controls.target);
 
-    // Fog follows zoom: close up it's a corridor, far out the field sprawls into black.
     if (scene.fog instanceof THREE.Fog) {
-      scene.fog.near = dist * lerp(0.75, 1.5, v.flat);
-      scene.fog.far = dist * lerp(2.4, 3.2, v.flat);
+      scene.fog.near = dist * lerp(0.8, 1.4, v.flat);
+      scene.fog.far = dist * lerp(2.6, 3.4, v.flat);
     }
 
     const isFlat = v.flat > 0.5;
@@ -623,58 +567,66 @@ function Rig({ focus, panelOpen, dimension, zoomIn, onFlatChange, onCenterYear, 
       wasFlat.current = isFlat;
       onFlatChange(isFlat);
     }
-    const y = yearAt(controls.target.x);
-    if (y !== lastYear.current) {
-      lastYear.current = y;
-      onCenterYear(y);
+    // Re-center the drawn window once you've travelled a few months from its middle.
+    const r = rowAt(controls.target.z);
+    if (Math.abs(r - lastRow.current) > 12) {
+      lastRow.current = r;
+      onCenterRow(r);
     }
   });
   return null;
 }
 
 export function DayField(props: Props) {
-  const [centerYear, setCenterYear] = useState(BASE_YEAR);
-  const view = useRef({ flat: props.dimension === '2d' ? 1 : 0 });
-  const start = useMemo(() => {
+  const startPos = useMemo(() => {
     const p = keyPosition(props.focus.key);
-    p.x += 3 * PITCH;
+    p.x = Math.max(p.x, 15 * PITCH * 0.6);
     return p;
     // only the initial focus matters for the starting camera
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const startDir = props.dimension === '2d' ? TOP_DOWN : TILTED;
+  const [centerRow, setCenterRow] = useState(() => rowAt(startPos.z));
+  const view = useRef({ flat: props.dimension === '2d' && !props.ambient ? 1 : 0, dist: props.ambient ? AMBIENT_DIST : START_DIST });
+  const startDir = props.dimension === '2d' && !props.ambient ? TOP_DOWN : TILTED;
+  const startDist = props.ambient ? AMBIENT_DIST : START_DIST;
+  // Only the first render matters; after that the Rig moves the camera.
+  const startTarget = useMemo(
+    () => (props.ambient ? startPos.clone().add(AMBIENT_OFFSET) : startPos),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   return (
     <Canvas
       dpr={[1, 2]}
-      camera={{ fov: 50, position: start.clone().addScaledVector(startDir, START_DIST).toArray(), near: 0.5, far: 900 }}
+      camera={{ fov: 50, position: startTarget.clone().addScaledVector(startDir, startDist).toArray(), near: 0.5, far: 1200 }}
       gl={{ antialias: true }}
       onCreated={({ gl }) => gl.setClearColor(BG)}
     >
       <fog attach="fog" args={[BG, 15, 45]} />
-      {/* Overcast: soft sky from above, a low hard sun raking across the faces. */}
-      <hemisphereLight args={['#d8d8d4', '#1a1a1a', 1.1]} />
-      <directionalLight position={[-14, 18, 6]} intensity={1.7} color="#f1eee8" />
-      <directionalLight position={[12, 5, -10]} intensity={0.25} color="#8f6bff" />
+      <hemisphereLight args={['#e8e8ec', '#202022', 1.2]} />
+      <directionalLight position={[-14, 18, 6]} intensity={1.3} color="#f4f4f6" />
+      <directionalLight position={[12, 5, -10]} intensity={0.2} color="#8f6bff" />
       <Days
         marks={props.marks}
         today={props.today}
         selected={props.selected}
+        deadlines={props.deadlines}
         onSelect={props.onSelect}
         startDate={props.startDate}
-        centerYear={centerYear}
+        centerRow={centerRow}
         view={view}
       />
-      <YearLabels centerYear={centerYear} startDate={props.startDate} />
-      <Lattice view={view} />
+      <Void startDate={props.startDate} view={view} />
+      <Labels centerRow={centerRow} startDate={props.startDate} view={view} />
       <Dust view={view} />
       <MapControls
         makeDefault
-        target={start}
+        target={startTarget}
         enableRotate={false}
         screenSpacePanning={false}
-        minDistance={5}
-        maxDistance={260}
+        minDistance={6}
+        maxDistance={240}
         enableDamping
         dampingFactor={0.12}
       />
@@ -683,11 +635,10 @@ export function DayField(props: Props) {
         panelOpen={props.panelOpen}
         dimension={props.dimension}
         zoomIn={props.zoomIn}
+        ambient={props.ambient}
         onFlatChange={props.onFlatChange}
-        onCenterYear={setCenterYear}
+        onCenterRow={setCenterRow}
         view={view}
-        startDate={props.startDate}
-        today={props.today}
       />
     </Canvas>
   );

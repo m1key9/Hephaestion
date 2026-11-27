@@ -3,7 +3,11 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { DayField, type DayMark, type Dimension } from './components/DayField';
 import { DayPanel } from './components/DayPanel';
 import { TrackerEditor } from './components/TrackerEditor';
+import { Home } from './components/Home';
+import { DeadlinesSheet } from './components/Deadlines';
+import { ArcSheet } from './components/Arc';
 import { START_DATE, db, exportBackup, importBackup, setStartDate, sortTrackers } from './lib/db';
+import { AI_AUTO, AI_BUDGET, AI_KEY, BUDGETS, catchUp, setSetting, spentThisMonth, testKey } from './lib/ai';
 import { todayKey } from './lib/dates';
 import { streakInfo } from './lib/streaks';
 
@@ -26,18 +30,23 @@ function loadDimension(): Dimension {
   }
 }
 
+type Sheet = null | 'trackers' | 'newTracker' | 'menu' | 'deadlines' | 'arc';
+
 export default function App() {
   const today = useToday();
   const trackers = useLiveQuery(async () => sortTrackers(await db.trackers.toArray())) ?? [];
   const entries = useLiveQuery(() => db.entries.toArray()) ?? [];
   const noteDates = useLiveQuery(async () => new Set((await db.notes.orderBy('date').uniqueKeys()) as string[])) ?? new Set<string>();
+  const deadlines = useLiveQuery(() => db.deadlines.toArray()) ?? [];
   // null = never chosen; undefined = still loading
   const startSetting = useLiveQuery(async () => (await db.settings.get(START_DATE))?.value ?? null);
+  const hasKey = !!useLiveQuery(async () => (await db.settings.get(AI_KEY))?.value);
 
+  const [mode, setMode] = useState<'home' | 'field'>('home');
+  const [sheet, setSheet] = useState<Sheet>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [focus, setFocus] = useState({ key: today, nonce: 0 });
   const [filter, setFilter] = useState<string | null>(null);
-  const [view, setView] = useState<'field' | 'trackers' | 'newTracker' | 'menu'>('field');
   const [dimension, setDimension] = useState<Dimension>(loadDimension);
   const [flat, setFlat] = useState(dimension === '2d');
   const [zoomIn, setZoomIn] = useState(0);
@@ -68,11 +77,11 @@ export default function App() {
       if (filter && e.trackerId !== filter) continue;
       const t = byId.get(e.trackerId);
       if (!t) continue;
-      // Counted trackers stack one layer per time (up to 4), so heavy days stand taller.
+      // Counted trackers get one stripe per time (up to 4), so heavy days show it.
       const layers = t.multi ? Math.min(e.count ?? 1, 4) : 1;
       for (let i = 0; i < layers; i++) get(e.date).colors.push(t.color);
     }
-    // Keep each day's layers in tracker order, so stacks read the same way every day.
+    // Keep each day's stripes in tracker order, so they read the same way every day.
     const rank = new Map(trackers.map((t, i) => [t.color, i]));
     for (const v of m.values()) v.colors.sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0));
     if (!filter) for (const d of noteDates) get(d).note = true;
@@ -97,107 +106,159 @@ export default function App() {
     return first;
   }, [startSetting, entries, noteDates, today]);
 
+  const deadlineDays = useMemo(() => new Set(deadlines.filter((d) => !d.done).map((d) => d.date)), [deadlines]);
+
   const goTo = (key: string) => {
     if (key < startDate) return;
     setSelected(key);
     setFocus({ key, nonce: Date.now() });
   };
 
+  const enterField = () => {
+    setMode('field');
+    setSheet(null);
+    setSelected(null);
+    setFocus({ key: today, nonce: Date.now() });
+    setZoomIn(Date.now());
+  };
+
+  const goHome = () => {
+    setMode('home');
+    setSelected(null);
+    setSheet(null);
+  };
+
   useEffect(() => {
     navigator.storage?.persist?.().catch(() => {});
   }, []);
 
+  // Once a session, quietly catch up on any reflections that are due.
+  const caughtUp = useRef(false);
+  useEffect(() => {
+    if (!hasKey || caughtUp.current || startSetting === undefined) return;
+    caughtUp.current = true;
+    catchUp(today, startDate).catch(() => {
+      /* budget reached or offline: the Arc page offers to try again by hand */
+    });
+  }, [hasKey, today, startDate, startSetting]);
+
+  const needsWelcome = startSetting === null && active.length === 0;
+  const closeSheet = () => setSheet(null);
+
   return (
-    <div className="app">
+    <div className={`app ${mode}`}>
       <DayField
         marks={marks}
         today={today}
         selected={selected}
+        deadlines={deadlineDays}
         focus={focus}
         panelOpen={!!selected}
         dimension={dimension}
         zoomIn={zoomIn}
+        ambient={mode === 'home'}
         onFlatChange={setFlat}
         onSelect={goTo}
         startDate={startDate}
       />
 
-      <header className="top">
-        <div className="brand">
-          <span className="wordmark">Hephaestion</span>
-          <span className="sub">{filter ? `Showing ${byId.get(filter)?.name}` : 'A field of days'}</span>
-        </div>
-        <nav className="actions">
-          <button className="ghost" onClick={() => goTo(today)}>Today</button>
-          <button className="ghost" onClick={() => setView('trackers')}>Trackers</button>
-          <button className="ghost" onClick={() => setView('menu')} aria-label="Menu">•••</button>
-        </nav>
-      </header>
-
-      {active.length > 0 && (
-        <div className="legend" role="toolbar" aria-label="Filter by tracker">
-          {active.map((t) => {
-            const s = streaks.get(t.id);
-            return (
-              <button
-                key={t.id}
-                className={`chip ${filter === t.id ? 'on' : ''} ${filter && filter !== t.id ? 'dim' : ''}`}
-                style={{ '--c': t.color } as React.CSSProperties}
-                onClick={() => setFilter(filter === t.id ? null : t.id)}
-                title={s ? `${s.current} days running · longest ${s.longest} · ${s.total} in all` : undefined}
-              >
-                <span className="swatch" />
-                {t.name}
-                {s && s.current > 0 && <span className="streak">· {s.current}</span>}
-              </button>
-            );
-          })}
-          <button className="chip add" onClick={() => setView('newTracker')} aria-label="New tracker">+</button>
-        </div>
+      {mode === 'home' && !needsWelcome && (
+        <Home
+          today={today}
+          trackers={active}
+          deadlines={deadlines}
+          hasKey={hasKey}
+          onEnterField={enterField}
+          onDeadlines={() => setSheet('deadlines')}
+          onArc={() => setSheet('arc')}
+          onSettings={() => setSheet('menu')}
+          onNewTracker={() => setSheet('newTracker')}
+        />
       )}
 
-      {active.length === 0 && view === 'field' && !selected && (
+      {needsWelcome && !sheet && (
         <Welcome
-          initial={startSetting ?? today}
           today={today}
           onBegin={async (d) => {
             await setStartDate(d);
-            setView('trackers');
+            setSheet('trackers');
           }}
         />
       )}
 
-      {selected && view === 'field' && (
-        <DayPanel
-          date={selected}
-          today={today}
-          trackers={active}
-          onDate={goTo}
-          startDate={startDate}
-          onClose={() => setSelected(null)}
-          onManageTrackers={() => setView('trackers')}
-          onNewTracker={() => setView('newTracker')}
-        />
+      {mode === 'field' && (
+        <>
+          <header className="top">
+            <button className="back" onClick={goHome} aria-label="Home">
+              <span aria-hidden>←</span>
+              <span className="brand">
+                <span className="wordmark">Hephaestion</span>
+                <span className="sub">{filter ? `Showing ${byId.get(filter)?.name}` : 'The field'}</span>
+              </span>
+            </button>
+            <nav className="actions">
+              <button className="ghost" onClick={() => goTo(today)}>Today</button>
+              <button className="ghost" onClick={() => setSheet('trackers')}>Trackers</button>
+            </nav>
+          </header>
+
+          {active.length > 0 && (
+            <div className="legend" role="toolbar" aria-label="Filter by tracker">
+              {active.map((t) => {
+                const s = streaks.get(t.id);
+                return (
+                  <button
+                    key={t.id}
+                    className={`chip ${filter === t.id ? 'on' : ''} ${filter && filter !== t.id ? 'dim' : ''}`}
+                    style={{ '--c': t.color } as React.CSSProperties}
+                    onClick={() => setFilter(filter === t.id ? null : t.id)}
+                    title={s ? `${s.current} days running · longest ${s.longest} · ${s.total} in all` : undefined}
+                  >
+                    <span className="swatch" />
+                    {t.name}
+                    {s && s.current > 0 && <span className="streak">· {s.current}</span>}
+                  </button>
+                );
+              })}
+              <button className="chip add" onClick={() => setSheet('newTracker')} aria-label="New tracker">+</button>
+            </div>
+          )}
+
+          {selected && !sheet && (
+            <DayPanel
+              date={selected}
+              today={today}
+              trackers={active}
+              onDate={goTo}
+              startDate={startDate}
+              onClose={() => setSelected(null)}
+              onManageTrackers={() => setSheet('trackers')}
+              onNewTracker={() => setSheet('newTracker')}
+            />
+          )}
+
+          <button
+            className="dims"
+            onClick={toggleDimension}
+            aria-label={flat ? 'Switch to 3D' : 'Switch to flat 2D map'}
+            title={flat ? 'Switch to 3D' : 'Switch to flat 2D map'}
+          >
+            {flat ? '3D' : '2D'}
+          </button>
+        </>
       )}
 
-      <button
-        className="dims"
-        onClick={toggleDimension}
-        aria-label={flat ? 'Switch to 3D' : 'Switch to flat 2D map'}
-        title={flat ? 'Switch to 3D' : 'Switch to flat 2D map'}
-      >
-        {flat ? '3D' : '2D'}
-      </button>
-
-      {view === 'trackers' && <TrackerEditor trackers={trackers} onClose={() => setView('field')} />}
-      {view === 'newTracker' && <TrackerEditor trackers={trackers} startNew onClose={() => setView('field')} />}
-      {view === 'menu' && <Menu startDate={startDate} today={today} onClose={() => setView('field')} />}
+      {sheet === 'trackers' && <TrackerEditor trackers={trackers} onClose={closeSheet} />}
+      {sheet === 'newTracker' && <TrackerEditor trackers={trackers} startNew onClose={closeSheet} />}
+      {sheet === 'deadlines' && <DeadlinesSheet deadlines={deadlines} today={today} onClose={closeSheet} />}
+      {sheet === 'arc' && <ArcSheet today={today} hasKey={hasKey} onClose={closeSheet} onSettings={() => setSheet('menu')} />}
+      {sheet === 'menu' && <Menu startDate={startDate} today={today} hasKey={hasKey} onClose={closeSheet} />}
     </div>
   );
 }
 
-function Welcome({ initial, today, onBegin }: { initial: string; today: string; onBegin: (d: string) => void }) {
-  const [date, setDate] = useState(initial);
+function Welcome({ today, onBegin }: { today: string; onBegin: (d: string) => void }) {
+  const [date, setDate] = useState(today);
   return (
     <div className="empty">
       <p>Every box is a day.</p>
@@ -211,7 +272,86 @@ function Welcome({ initial, today, onBegin }: { initial: string; today: string; 
   );
 }
 
-function Menu({ startDate, today, onClose }: { startDate: string; today: string; onClose: () => void }) {
+function ClaudeSettings({ hasKey }: { hasKey: boolean }) {
+  const [key, setKey] = useState('');
+  const [state, setState] = useState<'idle' | 'testing' | 'ok' | 'bad'>('idle');
+  const [err, setErr] = useState('');
+  const cap = useLiveQuery(async () => Number((await db.settings.get(AI_BUDGET))?.value ?? 1)) ?? 1;
+  const auto = useLiveQuery(async () => (await db.settings.get(AI_AUTO))?.value !== 'off') ?? true;
+  const spent = useLiveQuery(() => spentThisMonth()) ?? 0;
+
+  const save = async () => {
+    const k = key.trim();
+    if (!k) return;
+    setState('testing');
+    setErr('');
+    try {
+      await testKey(k);
+      await setSetting(AI_KEY, k);
+      setKey('');
+      setState('ok');
+    } catch (e) {
+      setState('bad');
+      setErr(e instanceof Error ? e.message : 'That key didn’t work.');
+    }
+  };
+
+  return (
+    <>
+      <h3>Claude</h3>
+      <p className="muted small">
+        Claude writes your weekly reflections, monthly chapters and arc. It reads only what you haven’t sealed, only when
+        a reflection is written, and the results stay on this phone. Get a key at console.anthropic.com (buy credits,
+        leave auto-reload off), then paste it here. The key stays on this device and is never included in backups.
+      </p>
+      {hasKey ? (
+        <div className="row">
+          <span className="ok-dot" /> Connected
+          <button className="link danger" onClick={() => confirm('Remove your API key from this device?') && setSetting(AI_KEY, null)}>
+            Remove key
+          </button>
+        </div>
+      ) : (
+        <div className="key-row">
+          <input
+            type="password"
+            autoComplete="off"
+            placeholder="sk-ant-…"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            aria-label="Anthropic API key"
+          />
+          <button className="solid" onClick={save} disabled={!key.trim() || state === 'testing'}>
+            {state === 'testing' ? 'Checking…' : 'Connect'}
+          </button>
+        </div>
+      )}
+      {state === 'bad' && <p className="status danger">{err}</p>}
+      {state === 'ok' && <p className="status">Connected. Your first reflections will be written next time you open the app.</p>}
+
+      <label className="field">
+        <span className="field-label">Monthly budget</span>
+        <select value={cap} onChange={(e) => setSetting(AI_BUDGET, e.target.value)}>
+          {BUDGETS.map((b) => (
+            <option key={b} value={b}>${b.toFixed(2)} a month</option>
+          ))}
+        </select>
+      </label>
+      <p className="faint small">
+        ${spent.toFixed(2)} used this month. Reflections stop before this would be passed. A typical month costs about $0.25.
+      </p>
+      <label className="toggle">
+        <input type="checkbox" checked={auto} onChange={(e) => setSetting(AI_AUTO, e.target.checked ? 'on' : 'off')} />
+        <span>
+          Write reflections automatically
+          <small>When a week or month ends, the next time you open the app.</small>
+        </span>
+      </label>
+    </>
+  );
+}
+
+function Menu({ startDate, today, hasKey, onClose }: { startDate: string; today: string; hasKey: boolean; onClose: () => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [msg, setMsg] = useState('');
 
@@ -237,7 +377,7 @@ function Menu({ startDate, today, onClose }: { startDate: string; today: string;
   };
 
   return (
-    <div className="sheet" role="dialog" aria-label="Menu">
+    <div className="sheet" role="dialog" aria-label="Settings">
       <header className="sheet-head">
         <h2>Settings</h2>
         <button className="icon" onClick={onClose} aria-label="Close">×</button>
@@ -252,10 +392,13 @@ function Menu({ startDate, today, onClose }: { startDate: string; today: string;
         />
       </label>
       <p className="muted small">Nothing before this day is drawn. Anything you recorded earlier is kept, just hidden.</p>
+
+      <ClaudeSettings hasKey={hasKey} />
+
       <h3>Backup</h3>
-      <p className="muted">
-        Everything you write lives only on this device. Nothing is uploaded anywhere. That also means if this
-        device is lost or its browser data is cleared, it's gone, so keep a backup.
+      <p className="muted small">
+        Everything you write lives only on this device. If the phone is lost or its browser data is cleared, it's gone,
+        so export a backup now and then.
       </p>
       <div className="sheet-actions column">
         <button className="solid wide" onClick={download}>Export backup</button>
@@ -271,8 +414,8 @@ function Menu({ startDate, today, onClose }: { startDate: string; today: string;
       {msg && <p className="status">{msg}</p>}
       <h3>On your phone</h3>
       <p className="muted small">
-        Open this page in Safari (iPhone) or Chrome (Android) and choose “Add to Home Screen”. It then opens
-        full-screen like an app, works offline, and the browser is far less likely to clear its data.
+        Open this page in Safari and choose Share → “Add to Home Screen”. It then opens full-screen like an app, works
+        offline, and Safari is far less likely to clear its data.
       </p>
     </div>
   );

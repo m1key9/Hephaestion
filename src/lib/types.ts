@@ -36,6 +36,46 @@ export interface Entry {
   updatedAt: number;
 }
 
+export interface Deadline {
+  id: string;
+  title: string;
+  date: string; // YYYY-MM-DD
+  /** Optional time of day, HH:MM. */
+  time?: string;
+  note?: string;
+  /** Days before to be reminded (used for the calendar alarm). */
+  remindDays?: number;
+  done: boolean;
+  createdAt: number;
+}
+
+/** Something Claude wrote back: a week's summary, a month's chapter, or the arc. */
+export interface Reflection {
+  id: string; // week:YYYY-MM-DD (its Monday) · month:YYYY-MM · arc
+  kind: 'week' | 'month' | 'arc';
+  period: string;
+  end?: string;
+  /** A week reflected on before it was over. */
+  partial?: boolean;
+  title: string;
+  text: string;
+  themes?: string[];
+  mood?: number; // -1..1
+  energy?: number; // 0..1
+  tensions?: string[];
+  growing?: string[];
+  turning?: string;
+  createdAt: number;
+}
+
+export interface AiUsage {
+  id: string;
+  at: number;
+  month: string; // YYYY-MM
+  cost: number; // dollars
+  kind: string;
+}
+
 export interface Note {
   id: string;
   date: string;

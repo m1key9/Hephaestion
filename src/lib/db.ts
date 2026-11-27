@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
-import type { Entry, FieldValue, Note, Tracker } from './types';
+import type { AiUsage, Deadline, Entry, FieldValue, Note, Reflection, Tracker } from './types';
 
 /** Everything lives in IndexedDB on this device. Nothing is sent anywhere. */
 export const db = new Dexie('hephaestion') as Dexie & {
@@ -7,6 +7,9 @@ export const db = new Dexie('hephaestion') as Dexie & {
   entries: EntityTable<Entry, 'id'>;
   notes: EntityTable<Note, 'id'>;
   settings: EntityTable<Setting, 'key'>;
+  deadlines: EntityTable<Deadline, 'id'>;
+  reflections: EntityTable<Reflection, 'id'>;
+  aiUsage: EntityTable<AiUsage, 'id'>;
 };
 
 export interface Setting {
@@ -20,6 +23,8 @@ db.version(1).stores({
   notes: 'id, date, createdAt',
 });
 db.version(2).stores({ settings: 'key' });
+db.version(3).stores({ deadlines: 'id, date' });
+db.version(4).stores({ reflections: 'id, kind, period', aiUsage: 'id, month' });
 
 /** The first day of the field. Nothing before it is drawn. */
 export const START_DATE = 'startDate';
@@ -118,6 +123,8 @@ export interface Backup {
   entries: Entry[];
   notes: Note[];
   settings?: Setting[];
+  deadlines?: Deadline[];
+  reflections?: Reflection[];
 }
 
 export async function exportBackup(): Promise<Backup> {
@@ -128,7 +135,10 @@ export async function exportBackup(): Promise<Backup> {
     trackers: await db.trackers.toArray(),
     entries: await db.entries.toArray(),
     notes: await db.notes.toArray(),
-    settings: await db.settings.toArray(),
+    settings: (await db.settings.toArray()).filter((s) => s.key !== 'aiKey'),
+    deadlines: await db.deadlines.toArray(),
+    // Your settings travel with the backup, but never your API key.
+    reflections: await db.reflections.toArray(),
   };
 }
 
@@ -137,11 +147,17 @@ export async function importBackup(data: unknown): Promise<void> {
   if (!b || b.app !== 'hephaestion' || !Array.isArray(b.trackers) || !Array.isArray(b.entries) || !Array.isArray(b.notes)) {
     throw new Error('Not a Hephaestion backup file.');
   }
-  await db.transaction('rw', [db.trackers, db.entries, db.notes, db.settings], async () => {
-    await Promise.all([db.trackers.clear(), db.entries.clear(), db.notes.clear(), db.settings.clear()]);
+  await db.transaction('rw', [db.trackers, db.entries, db.notes, db.settings, db.deadlines, db.reflections], async () => {
+    const key = await db.settings.get('aiKey');
+    await Promise.all([
+      db.trackers.clear(), db.entries.clear(), db.notes.clear(), db.settings.clear(), db.deadlines.clear(), db.reflections.clear(),
+    ]);
+    if (key) await db.settings.put(key);
     await db.trackers.bulkPut(b.trackers);
     await db.entries.bulkPut(b.entries);
     await db.notes.bulkPut(b.notes);
     if (Array.isArray(b.settings)) await db.settings.bulkPut(b.settings);
+    if (Array.isArray(b.deadlines)) await db.deadlines.bulkPut(b.deadlines);
+    if (Array.isArray(b.reflections)) await db.reflections.bulkPut(b.reflections);
   });
 }
